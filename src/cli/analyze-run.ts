@@ -9,6 +9,7 @@ import {
   type ReasoningEffort,
 } from "../analysis/analyze-evidence.ts";
 import type { CaseEvidence } from "../domain/evidence.ts";
+import { parseFlags } from "./parse-flags.ts";
 
 export interface AnalysisCliDependencies {
   readonly createAnalyzer?: (apiKey: string) => Analyzer;
@@ -79,7 +80,7 @@ function parseAnalysisOptions(
   if (typeof runDirectory === "undefined" || runDirectory.startsWith("--")) {
     return { ok: false, message: "Usage: pnpm research analyze <run-directory> [options]" };
   }
-  const parsedFlags = parseAnalysisFlags(flags);
+  const parsedFlags = parseFlags(flags, ["--model", "--reasoning-effort"]);
   if (!parsedFlags.ok) return parsedFlags;
   const model =
     parsedFlags.values.get("--model") ??
@@ -99,25 +100,6 @@ function parseAnalysisOptions(
     };
   }
   return { ok: true, options: { model, reasoningEffort, runDirectory } };
-}
-
-type AnalysisFlagsResult =
-  | { readonly ok: true; readonly values: ReadonlyMap<string, string> }
-  | { readonly message: string; readonly ok: false };
-
-function parseAnalysisFlags(arguments_: readonly string[]): AnalysisFlagsResult {
-  const values = new Map<string, string>();
-  const allowed = ["--model", "--reasoning-effort"];
-  for (let index = 0; index < arguments_.length; index += 2) {
-    const flag = arguments_[index];
-    const value = arguments_[index + 1];
-    if (typeof flag === "undefined" || typeof value === "undefined") {
-      return { ok: false, message: `Missing value for ${flag ?? "option"}.` };
-    }
-    if (!allowed.includes(flag)) return { ok: false, message: `Unknown option: ${flag}` };
-    values.set(flag, value);
-  }
-  return { ok: true, values };
 }
 
 function isReasoningEffort(value: string): value is ReasoningEffort {
