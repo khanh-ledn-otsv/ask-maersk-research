@@ -229,6 +229,38 @@ describe("research CLI", () => {
     });
   });
 
+  test("analyze does not call the API when a finding already exists", async () => {
+    const runDirectory = await temporaryDirectories.create("maersk-recorded-run-");
+    await writeRecordedEvidence(runDirectory);
+    await writeFile(join(runDirectory, "finding.json"), "existing finding\n");
+    const errors: string[] = [];
+    let analysisCalls = 0;
+
+    const exitCode = await runCli(["analyze", runDirectory], {
+      browser: createBrowser(async () => {
+        throw new Error("browser should not launch");
+      }),
+      createAnalyzer: () => ({
+        async analyze() {
+          analysisCalls += 1;
+          throw new Error("analysis should not run");
+        },
+      }),
+      createRunId: () => "unused",
+      environment: { OPEN_AI_API_KEY: "test-api-key" },
+      now: () => new Date("2026-08-25T16:00:00.000Z"),
+      stderr: (message) => errors.push(message),
+      stdout: () => undefined,
+      waitForCompletion: async () => undefined,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(analysisCalls).toBe(0);
+    expect(errors).toEqual([
+      `Analysis failed: Finding already exists: ${join(runDirectory, "finding.json")}.`,
+    ]);
+  });
+
   test("run executes a manual case by ID and persists case evidence", async () => {
     const casesDirectory = await temporaryDirectories.create("maersk-cases-");
     const outputRoot = await temporaryDirectories.create("maersk-research-cli-");
