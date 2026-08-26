@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   chromium,
   type BrowserContext,
@@ -13,6 +16,7 @@ import type {
   NetworkEvidence,
   NetworkFrameEvidence,
   RecordedError,
+  TraceCapture,
 } from "../domain/evidence.ts";
 import type {
   BrowserRecorder,
@@ -122,6 +126,11 @@ async function captureWithPlaywright(
     headless: options.headless,
     viewport: { width: 1_440, height: 1_000 },
   });
+  let traceStarted = false;
+  if (input.captureTrace === true) {
+    await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+    traceStarted = true;
+  }
   const page = context.pages()[0] ?? (await context.newPage());
   const interaction = await startInteractionCapture(page, options.now);
   const pageErrors = startBrowserErrorCapture(context, options.now, (errorPage) =>
@@ -135,7 +144,7 @@ async function captureWithPlaywright(
     const recordingStartedAt = options.now();
     const startScreenshot = await takeScreenshot(page);
 
-    await input.waitForCompletion();
+    await executeInteraction(page, input, options.assistantSelector);
 
     const completedAt = options.now();
     const resultPage = await findResultPage(context.pages(), page, options.resultSelector);
@@ -173,6 +182,8 @@ async function captureWithPlaywright(
         data,
       }),
     );
+    const trace = traceStarted ? await finishTrace(context) : undefined;
+    traceStarted = false;
 
     return {
       page: { url: resultPage.url(), title: await resultPage.title() },
@@ -191,9 +202,65 @@ async function captureWithPlaywright(
         ),
       },
       errors,
+      ...(typeof trace === "undefined" ? {} : { trace }),
     };
   } finally {
+    if (traceStarted) await context.tracing.stop().catch(() => undefined);
     await context.close();
+  }
+}
+
+async function finishTrace(context: BrowserContext): Promise<TraceCapture> {
+  const temporaryDirectory = await mkdtemp(join(tmpdir(), "ask-maersk-trace-"));
+  const path = join(temporaryDirectory, "trace.zip");
+  try {
+    await context.tracing.stop({ path });
+    return { filename: "trace.zip", data: await readFile(path) };
+  } finally {
+    await rm(temporaryDirectory, { force: true, recursive: true });
+  }
+}
+
+async function executeInteraction(
+  page: Page,
+  input: BrowserRecordingInput,
+  assistantSelector: string,
+): Promise<void> {
+  if (input.interaction?.mode !== "automated") {
+    await input.waitForCompletion();
+    return;
+  }
+
+  const previousAssistantText = await readAssistantText(page, assistantSelector);
+  const question = page.locator(input.interaction.inputSelector);
+  await question.waitFor({ state: "visible" });
+  await question.fill(input.expectedUserMessage);
+  if (typeof input.interaction.submitSelector === "undefined") {
+    await question.press("Enter");
+  } else {
+    await page.locator(input.interaction.submitSelector).click();
+  }
+
+  await page.waitForFunction(
+    ({ previousText, selector }) => {
+      const elements = Array.from(document.querySelectorAll(selector));
+      const latest = elements.at(-1);
+      return latest?.textContent?.trim() !== "" && latest?.textContent?.trim() !== previousText;
+    },
+    { previousText: previousAssistantText, selector: assistantSelector },
+  );
+  await waitForStableText(page.locator(assistantSelector).last());
+}
+
+async function waitForStableText(locator: Locator): Promise<void> {
+  let previous = (await locator.innerText()).trim();
+  let stableReads = 0;
+  while (stableReads < 3) {
+    await locator.page().waitForTimeout(250);
+    const current = (await locator.innerText()).trim();
+    if (current === previous) stableReads += 1;
+    else stableReads = 0;
+    previous = current;
   }
 }
 

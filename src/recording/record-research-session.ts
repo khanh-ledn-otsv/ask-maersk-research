@@ -11,12 +11,25 @@ export interface BrowserRecorder {
 }
 
 export interface BrowserRecordingInput {
+  readonly captureTrace?: boolean;
   readonly expectedUserMessage: string;
+  readonly interaction?: BrowserInteraction;
   readonly targetUrl: string;
   readonly waitForCompletion: () => Promise<void>;
 }
 
+export type BrowserInteraction =
+  | { readonly mode: "manual" }
+  | {
+      readonly inputSelector: string;
+      readonly mode: "automated";
+      readonly submitSelector?: string;
+    };
+
 export interface RecordResearchSessionInput {
+  readonly captureTrace?: boolean;
+  readonly caseId?: string;
+  readonly interaction?: BrowserInteraction;
   readonly outputRoot: string;
   readonly targetUrl: string;
   readonly userMessage: string;
@@ -42,13 +55,28 @@ export async function recordResearchSession(
   const runId = `${formatRunTimestamp(startedAt)}_${dependencies.createRunId()}`;
   const runDirectory = join(input.outputRoot, runId);
   const capture = await dependencies.browser.capture({
+    ...(typeof input.captureTrace === "undefined"
+      ? {}
+      : { captureTrace: input.captureTrace }),
     expectedUserMessage: input.userMessage,
+    ...(typeof input.interaction === "undefined" ? {} : { interaction: input.interaction }),
     targetUrl: input.targetUrl,
     waitForCompletion: input.waitForCompletion,
   });
-  const evidence = buildEvidence(runId, startedAt, dependencies.now().toISOString(), capture);
+  const evidence = buildEvidence(
+    runId,
+    startedAt,
+    dependencies.now().toISOString(),
+    capture,
+    input.caseId,
+  );
 
-  await persistRun({ evidence, runDirectory, screenshots: capture.screenshots });
+  await persistRun({
+    evidence,
+    runDirectory,
+    screenshots: capture.screenshots,
+    ...(typeof capture.trace === "undefined" ? {} : { trace: capture.trace }),
+  });
   return { runId, runDirectory };
 }
 
@@ -57,8 +85,10 @@ function buildEvidence(
   startedAt: string,
   completedAt: string,
   capture: BrowserCapture,
-): CaseEvidence {
+  caseId: string | undefined,
+): Omit<CaseEvidence, "trace"> {
   return {
+    ...(typeof caseId === "undefined" ? {} : { caseId }),
     runId,
     startedAt,
     completedAt,

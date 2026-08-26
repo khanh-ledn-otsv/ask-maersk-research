@@ -40,6 +40,39 @@ Override the configured URL, output directory, or known prompt when needed:
 pnpm research record --url https://example.test/ask-maersk --output data/runs --message "Track my shipment"
 ```
 
+## Run a research case
+
+Research cases are strict JSON files in `cases/`. Run one by its declared ID:
+
+```bash
+pnpm research run TRACK-001
+```
+
+A case declares an ID, category, objective, authentication requirement, execution mode, one message, trace preference, and optional notes. Invalid files and duplicate IDs are reported before browser capture starts. This stage deliberately accepts one message per case; multi-turn journeys are a later capability.
+
+```json
+{
+  "id": "TRACK-001",
+  "category": "TRACKING",
+  "objective": "Observe clarification when a shipment identifier is missing",
+  "authenticated": false,
+  "executionMode": "manual",
+  "messages": [{ "text": "Track my shipment" }],
+  "captureTrace": false,
+  "notes": "Use fake shipment data only."
+}
+```
+
+Manual cases keep recording while the researcher controls the persistent browser. Automated cases require a stable question selector and may optionally use a submit selector; without the latter, the recorder presses Enter in the question field:
+
+```bash
+ASK_MAERSK_INPUT_SELECTOR='[data-testid="question"]' \
+ASK_MAERSK_SUBMIT_SELECTOR='[data-testid="send"]' \
+pnpm research run CAPABILITY-001
+```
+
+Use `RESEARCH_CASES_DIR` to choose another case directory. A case with `captureTrace: true` also writes `trace/trace.zip` and references it from `evidence.json`.
+
 This exploratory recorder stores captured text, screenshots, and network values as observed. Use only public guest flows with fake or otherwise non-sensitive test data, and keep run directories local.
 
 ## Verify

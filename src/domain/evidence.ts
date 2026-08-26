@@ -17,6 +17,15 @@ export interface ScreenshotEvidence {
   readonly kind: "start" | "result" | "error";
 }
 
+export interface TraceCapture {
+  readonly filename: string;
+  readonly data: Buffer;
+}
+
+export interface TraceEvidence {
+  readonly path: string;
+}
+
 export interface NetworkEvidence {
   readonly id: string;
   readonly timestamp: string;
@@ -64,9 +73,11 @@ export interface BrowserCapture {
   readonly network: readonly NetworkEvidence[];
   readonly timings: TimingEvidence;
   readonly errors: readonly RecordedError[];
+  readonly trace?: TraceCapture;
 }
 
 export interface CaseEvidence {
+  readonly caseId?: string;
   readonly runId: string;
   readonly startedAt: string;
   readonly completedAt: string;
@@ -79,4 +90,5 @@ export interface CaseEvidence {
     readonly title: string;
   };
   readonly errors: readonly RecordedError[];
+  readonly trace?: TraceEvidence;
 }

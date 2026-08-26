@@ -11,6 +11,69 @@ const temporaryDirectories = createTemporaryDirectoryTracker();
 afterEach(() => temporaryDirectories.cleanup());
 
 describe("Playwright browser recorder", () => {
+  test("submits an automated case and waits for the declared answer", async () => {
+    const server = createServer((request, response) => {
+      if (request.url === "/answer") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ answer: "I can help track shipments." }));
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<!doctype html>
+        <html>
+          <head><title>Automated Ask Maersk fixture</title></head>
+          <body>
+            <form>
+              <input data-testid="question" />
+              <button data-testid="send" type="submit">Send</button>
+            </form>
+            <div class="assistant"></div>
+            <script>
+              document.querySelector('form').addEventListener('submit', async (event) => {
+                event.preventDefault();
+                const response = await fetch('/answer', { method: 'POST' });
+                const body = await response.json();
+                document.querySelector('.assistant').textContent = body.answer;
+              });
+            </script>
+          </body>
+        </html>`);
+    });
+    const port = await listen(server);
+    const userDataDirectory = await temporaryDirectories.create("maersk-automated-profile-");
+
+    try {
+      const recorder = createPlaywrightBrowserRecorder({
+        assistantSelector: ".assistant",
+        headless: true,
+        userDataDirectory,
+      });
+      const capture = await recorder.capture({
+        captureTrace: true,
+        expectedUserMessage: "What can you help me with?",
+        interaction: {
+          inputSelector: "[data-testid=question]",
+          mode: "automated",
+          submitSelector: "[data-testid=send]",
+        },
+        targetUrl: `http://127.0.0.1:${port}/`,
+        waitForCompletion: async () => {
+          throw new Error("automated capture must not wait for researcher input");
+        },
+      });
+
+      expect(capture.conversation.map(({ role, text }) => ({ role, text }))).toEqual([
+        { role: "user", text: "What can you help me with?" },
+        { role: "assistant", text: "I can help track shipments." },
+      ]);
+      expect(capture.errors).toEqual([]);
+      expect(capture.trace?.filename).toBe("trace.zip");
+      expect(capture.trace?.data.subarray(0, 2).toString()).toBe("PK");
+    } finally {
+      await close(server);
+    }
+  });
+
   test("captures a visible Ask Maersk sidebar instead of the unchanged opening page", async () => {
     const sidebarApiObserved = Promise.withResolvers<void>();
     const server = createServer((request, response) => {

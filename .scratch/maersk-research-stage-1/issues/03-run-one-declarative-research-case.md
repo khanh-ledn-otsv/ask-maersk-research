@@ -4,10 +4,10 @@
 
 **Blocked by:** 02: Make recorded evidence diagnostically reliable.
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] A research case declares its identity, category, objective, authentication requirement, execution mode, messages, trace preference, and optional notes.
-- [ ] Invalid or duplicate cases fail before the browser is launched and report actionable validation errors.
-- [ ] Running a single case by ID produces evidence conforming to the same contract as a manual recording.
-- [ ] Manual execution keeps recording active while the researcher interacts; automated execution submits the declared message when stable selectors are available.
-- [ ] Tests exercise valid, invalid, missing, manual, and automated case behaviour without depending on the live site.
+- [x] A research case declares its identity, category, objective, authentication requirement, execution mode, messages, trace preference, and optional notes.
+- [x] Invalid or duplicate cases fail before the browser is launched and report actionable validation errors.
+- [x] Running a single case by ID produces evidence conforming to the same contract as a manual recording.
+- [x] Manual execution keeps recording active while the researcher interacts; automated execution submits the declared message when stable selectors are available.
+- [x] Tests exercise valid, invalid, missing, manual, and automated case behaviour without depending on the live site.
