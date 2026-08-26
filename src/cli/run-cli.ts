@@ -1,5 +1,15 @@
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  analyzeEvidence,
+  DEFAULT_ANALYSIS_MODEL,
+  DEFAULT_REASONING_EFFORT,
+  type Analyzer,
+  type Finding,
+  type ReasoningEffort,
+} from "../analysis/analyze-evidence.ts";
 import { loadResearchCases } from "../cases/load-research-cases.ts";
+import type { CaseEvidence } from "../domain/evidence.ts";
 import type { ResearchCase } from "../domain/research-case.ts";
 import {
   recordResearchSession,
@@ -8,6 +18,7 @@ import {
 
 export interface CliDependencies {
   readonly browser: BrowserRecorder;
+  readonly createAnalyzer?: (apiKey: string) => Analyzer;
   readonly createRunId: () => string;
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly now: () => Date;
@@ -29,6 +40,12 @@ interface RunOptions extends RecordOptions {
   readonly submitSelector?: string;
 }
 
+interface AnalysisOptions {
+  readonly model: string;
+  readonly reasoningEffort: ReasoningEffort;
+  readonly runDirectory: string;
+}
+
 type RecordOptionsResult =
   | { readonly ok: true; readonly options: RecordOptions }
   | { readonly message: string; readonly ok: false };
@@ -44,6 +61,7 @@ export async function runCli(
   const [command, ...options] = arguments_;
   const stderr = dependencies.stderr ?? dependencies.stdout;
 
+  if (command === "analyze") return runAnalysis(options, dependencies, stderr);
   if (command === "run") return runDeclaredCase(options, dependencies, stderr);
   if (command !== "record") return reportUsage(stderr);
 
@@ -72,6 +90,100 @@ export async function runCli(
 
   dependencies.stdout(`Evidence saved: ${result.runDirectory}`);
   return 0;
+}
+
+async function runAnalysis(
+  arguments_: readonly string[],
+  dependencies: CliDependencies,
+  stderr: (message: string) => void,
+): Promise<number> {
+  const parsed = parseAnalysisOptions(arguments_, dependencies.environment);
+  if (!parsed.ok) {
+    stderr(parsed.message);
+    return 1;
+  }
+  const apiKey = dependencies.environment.OPEN_AI_API_KEY;
+  if (typeof apiKey === "undefined" || apiKey.trim().length === 0) {
+    stderr("OPEN_AI_API_KEY is required for analysis. Recording remains available without it.");
+    return 1;
+  }
+  if (typeof dependencies.createAnalyzer === "undefined") {
+    stderr("Analysis is not configured.");
+    return 1;
+  }
+
+  const findingPath = join(parsed.options.runDirectory, "finding.json");
+  try {
+    const evidence = JSON.parse(
+      await readFile(join(parsed.options.runDirectory, "evidence.json"), "utf8"),
+    ) as CaseEvidence;
+    const finding = await analyzeEvidence(evidence, {
+      analyzer: dependencies.createAnalyzer(apiKey),
+      model: parsed.options.model,
+      reasoningEffort: parsed.options.reasoningEffort,
+    });
+    await writeFile(findingPath, `${JSON.stringify(finding, null, 2)}\n`, { flag: "wx" });
+    dependencies.stdout(`Finding saved: ${findingPath}`);
+    dependencies.stdout(formatAnalysisUsage(finding));
+    return 0;
+  } catch (error: unknown) {
+    stderr(`Analysis failed: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+}
+
+type AnalysisOptionsResult =
+  | { readonly ok: true; readonly options: AnalysisOptions }
+  | { readonly message: string; readonly ok: false };
+
+function parseAnalysisOptions(
+  arguments_: readonly string[],
+  environment: Readonly<Record<string, string | undefined>>,
+): AnalysisOptionsResult {
+  const [runDirectory, ...flags] = arguments_;
+  if (typeof runDirectory === "undefined" || runDirectory.startsWith("--")) {
+    return { ok: false, message: "Usage: pnpm research analyze <run-directory> [options]" };
+  }
+  const parsedFlags = parseFlags(flags, ["--model", "--reasoning-effort"]);
+  if (!parsedFlags.ok) return parsedFlags;
+  const model =
+    parsedFlags.values.get("--model") ??
+    environment.RESEARCH_ANALYSIS_MODEL ??
+    DEFAULT_ANALYSIS_MODEL;
+  if (model.trim().length === 0) {
+    return { ok: false, message: "Analysis model must not be empty." };
+  }
+  const reasoningEffort =
+    parsedFlags.values.get("--reasoning-effort") ??
+    environment.RESEARCH_ANALYSIS_REASONING_EFFORT ??
+    DEFAULT_REASONING_EFFORT;
+  if (!isReasoningEffort(reasoningEffort)) {
+    return {
+      ok: false,
+      message: "Reasoning effort must be one of: none, low, medium, high, xhigh.",
+    };
+  }
+  return { ok: true, options: { model, reasoningEffort, runDirectory } };
+}
+
+function isReasoningEffort(value: string): value is ReasoningEffort {
+  return ["none", "low", "medium", "high", "xhigh"].includes(value);
+}
+
+function formatAnalysisUsage(finding: Finding): string {
+  const usage = finding.analysis.usage;
+  return [
+    `Analysis: model=${finding.analysis.model}`,
+    `reasoning=${finding.analysis.reasoningEffort}`,
+    `input=${formatTokenCount(usage?.inputTokens)}`,
+    `cached-input=${formatTokenCount(usage?.cachedInputTokens)}`,
+    `output=${formatTokenCount(usage?.outputTokens)}`,
+    `reasoning-tokens=${formatTokenCount(usage?.reasoningTokens)}`,
+  ].join(" ");
+}
+
+function formatTokenCount(value: number | undefined): string {
+  return typeof value === "undefined" ? "not-returned" : String(value);
 }
 
 async function runDeclaredCase(
@@ -252,6 +364,8 @@ function parseFlags(arguments_: readonly string[], allowed: readonly string[]): 
 }
 
 function reportUsage(stderr: (message: string) => void): 1 {
-  stderr("Usage: pnpm research <record [options] | run <case-id> [options]>");
+  stderr(
+    "Usage: pnpm research <record [options] | run <case-id> [options] | analyze <run-directory> [options]>",
+  );
   return 1;
 }

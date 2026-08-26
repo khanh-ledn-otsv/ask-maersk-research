@@ -81,6 +81,26 @@ Use `RESEARCH_CASES_DIR` to choose another case directory. A case with `captureT
 
 This exploratory recorder stores captured text, screenshots, and network values as observed. Use only public guest flows with fake or otherwise non-sensitive test data, and keep run directories local.
 
+## Analyze a recorded run
+
+Analysis is optional and is the only workflow that requires `OPEN_AI_API_KEY`. It uses the OpenAI Responses API through a provider-neutral analyzer and writes a validated `finding.json` beside the run's `evidence.json`:
+
+```bash
+pnpm research analyze data/runs/<run-directory>
+```
+
+The default model is `gpt-5.4-mini` with reasoning effort `none`. Select a different model or effort explicitly with flags or environment variables:
+
+```bash
+pnpm research analyze data/runs/<run-directory> \
+  --model gpt-5-nano \
+  --reasoning-effort low
+```
+
+Use `RESEARCH_ANALYSIS_MODEL` and `RESEARCH_ANALYSIS_REASONING_EFFORT` for persistent overrides. Supported reasoning efforts are `none`, `low`, `medium`, `high`, and `xhigh`. Analysis makes one request with the selected model and never falls back to another model.
+
+Each finding classifies the observed behavior, lists plausible API candidates, and states Ask ONE implications. Every claim includes references to conversation turns, screenshots, network requests, timings, errors, or page evidence from the same run. Missing and unsupported references fail validation before anything is persisted. The CLI reports the actual model and input, cached-input, output, and reasoning token counts returned by the API.
+
 ## Verify
 
 ```bash

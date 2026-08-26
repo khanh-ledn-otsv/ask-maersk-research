@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stderr, stdout } from "node:process";
 import pino from "pino";
+import { createOpenAIEvidenceAnalyzer } from "./analysis/openai-evidence-analyzer.ts";
 import { createPlaywrightBrowserRecorder } from "./browser/playwright-browser-recorder.ts";
 import { runCli } from "./cli/run-cli.ts";
 
@@ -23,6 +24,7 @@ const browser = createPlaywrightBrowserRecorder({
 try {
   process.exitCode = await runCli(process.argv.slice(2), {
     browser,
+    createAnalyzer: createOpenAIEvidenceAnalyzer,
     createRunId: () => randomUUID().slice(0, 8),
     environment: process.env,
     now: () => new Date(),

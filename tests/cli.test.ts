@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
+import type { Analyzer } from "../src/analysis/analyze-evidence.ts";
 import { runCli } from "../src/cli/run-cli.ts";
 import type { BrowserRecorder } from "../src/recording/record-research-session.ts";
 import { createTemporaryDirectoryTracker } from "./support/temp-directories.ts";
@@ -88,6 +89,144 @@ describe("research CLI", () => {
     expect(errors).toEqual([
       "ASK_MAERSK_URL is required. Set it in .env or pass --url <url>.",
     ]);
+  });
+
+  test("analyze exits clearly without an API key", async () => {
+    const errors: string[] = [];
+    const browser = createBrowser(async () => {
+      throw new Error("browser should not launch");
+    });
+
+    const exitCode = await runCli(["analyze", "/tmp/a-recorded-run"], {
+      browser,
+      createRunId: () => "unused",
+      environment: {},
+      now: () => new Date("2026-08-25T16:00:00.000Z"),
+      stderr: (message) => errors.push(message),
+      stdout: () => undefined,
+      waitForCompletion: async () => undefined,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(errors).toEqual([
+      "OPEN_AI_API_KEY is required for analysis. Recording remains available without it.",
+    ]);
+  });
+
+  test("analyze persists a validated finding with explicit model selection", async () => {
+    const runDirectory = await temporaryDirectories.create("maersk-recorded-run-");
+    await writeRecordedEvidence(runDirectory);
+    const output: string[] = [];
+    const requests: Parameters<Analyzer["analyze"]>[0][] = [];
+
+    const exitCode = await runCli(
+      [
+        "analyze",
+        runDirectory,
+        "--model",
+        "gpt-5-nano",
+        "--reasoning-effort",
+        "low",
+      ],
+      {
+        browser: createBrowser(async () => {
+          throw new Error("browser should not launch");
+        }),
+        createAnalyzer: (apiKey) => {
+          expect(apiKey).toBe("test-api-key");
+          return {
+            async analyze(request) {
+              requests.push(request);
+              return {
+                model: "gpt-5-nano",
+                output: {
+                  sourceRunId: "recorded-run",
+                  behavior: {
+                    classification: "clarification",
+                    claim: "Ask Maersk requests a shipment identifier.",
+                    evidenceReferences: [{ kind: "conversation", locator: "1" }],
+                  },
+                  apiCandidates: [],
+                  askOneImplications: [
+                    {
+                      claim: "Ask ONE should collect the identifier before tracking.",
+                      evidenceReferences: [{ kind: "conversation", locator: "1" }],
+                    },
+                  ],
+                },
+                usage: { inputTokens: 80, cachedInputTokens: 20, outputTokens: 30 },
+              };
+            },
+          };
+        },
+        createRunId: () => "unused",
+        environment: { OPEN_AI_API_KEY: "test-api-key" },
+        now: () => new Date("2026-08-25T16:00:00.000Z"),
+        stdout: (message) => output.push(message),
+        waitForCompletion: async () => undefined,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ model: "gpt-5-nano", reasoningEffort: "low" });
+    const finding = JSON.parse(
+      await readFile(join(runDirectory, "finding.json"), "utf8"),
+    ) as { analysis: { model: string; usage: { cachedInputTokens: number } } };
+    expect(finding.analysis).toMatchObject({
+      model: "gpt-5-nano",
+      usage: { cachedInputTokens: 20 },
+    });
+    expect(output).toEqual([
+      `Finding saved: ${join(runDirectory, "finding.json")}`,
+      "Analysis: model=gpt-5-nano reasoning=low input=80 cached-input=20 output=30 reasoning-tokens=not-returned",
+    ]);
+  });
+
+  test("analyze does not persist a finding with an unsupported evidence reference", async () => {
+    const runDirectory = await temporaryDirectories.create("maersk-recorded-run-");
+    await writeRecordedEvidence(runDirectory);
+    const errors: string[] = [];
+
+    const exitCode = await runCli(["analyze", runDirectory], {
+      browser: createBrowser(async () => {
+        throw new Error("browser should not launch");
+      }),
+      createAnalyzer: () => ({
+        async analyze() {
+          return {
+            model: "gpt-5.4-mini",
+            output: {
+              sourceRunId: "recorded-run",
+              behavior: {
+                classification: "clarification",
+                claim: "Ask Maersk requests a shipment identifier.",
+                evidenceReferences: [{ kind: "network", locator: "invented-request" }],
+              },
+              apiCandidates: [],
+              askOneImplications: [
+                {
+                  claim: "Ask ONE should collect an identifier first.",
+                  evidenceReferences: [{ kind: "conversation", locator: "1" }],
+                },
+              ],
+            },
+          };
+        },
+      }),
+      createRunId: () => "unused",
+      environment: { OPEN_AI_API_KEY: "test-api-key" },
+      now: () => new Date("2026-08-25T16:00:00.000Z"),
+      stderr: (message) => errors.push(message),
+      stdout: () => undefined,
+      waitForCompletion: async () => undefined,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(errors[0]).toMatch(/unsupported evidence reference network:invented-request/u);
+    await expect(readFile(join(runDirectory, "finding.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   test("run executes a manual case by ID and persists case evidence", async () => {
@@ -323,4 +462,34 @@ async function writeResearchCase(
   researchCase: Readonly<Record<string, unknown>>,
 ): Promise<void> {
   await writeFile(join(casesDirectory, `${String(researchCase.id)}.json`), JSON.stringify(researchCase));
+}
+
+async function writeRecordedEvidence(runDirectory: string): Promise<void> {
+  await writeFile(
+    join(runDirectory, "evidence.json"),
+    JSON.stringify({
+      runId: "recorded-run",
+      startedAt: "2026-08-25T16:00:00.000Z",
+      completedAt: "2026-08-25T16:00:02.000Z",
+      conversation: [
+        {
+          index: 0,
+          role: "user",
+          text: "Track my shipment",
+          timestamp: "2026-08-25T16:00:00.000Z",
+        },
+        {
+          index: 1,
+          role: "assistant",
+          text: "Please provide a shipment identifier.",
+          timestamp: "2026-08-25T16:00:01.000Z",
+        },
+      ],
+      screenshots: [],
+      network: [],
+      timings: [],
+      page: { url: "https://example.test/ask-maersk", title: "Ask Maersk" },
+      errors: [],
+    }),
+  );
 }
