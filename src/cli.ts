@@ -25,6 +25,7 @@ try {
   process.exitCode = await runCli(process.argv.slice(2), {
     browser,
     createAnalyzer: createOpenAIEvidenceAnalyzer,
+    createCorpusRunId: () => randomUUID().slice(0, 8),
     createRunId: () => randomUUID().slice(0, 8),
     environment: process.env,
     now: () => new Date(),

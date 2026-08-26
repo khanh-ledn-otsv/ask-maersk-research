@@ -1,0 +1,13 @@
+{
+  "id": "SCHEDULE-003",
+  "category": "SCHEDULE",
+  "objective": "Observe a destination change within one schedule conversation",
+  "authenticated": false,
+  "dataPolicy": "public",
+  "executionMode": "automated",
+  "messages": [
+    { "text": "Find sailings from Singapore to Rotterdam in September 2026" },
+    { "text": "Change the destination to Hamburg" }
+  ],
+  "captureTrace": false
+}

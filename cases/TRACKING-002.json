@@ -1,0 +1,11 @@
+{
+  "id": "TRACKING-002",
+  "category": "TRACKING",
+  "objective": "Observe validation and recovery for a deliberately fake booking reference",
+  "authenticated": false,
+  "dataPolicy": "fake",
+  "executionMode": "manual",
+  "messages": [{ "text": "Track booking FAKE-BOOKING-0001" }],
+  "captureTrace": true,
+  "notes": "Manual execution only. FAKE-BOOKING-0001 is an intentionally fake identifier, not customer data."
+}

@@ -1,0 +1,13 @@
+{
+  "id": "CONTEXT-003",
+  "category": "CONTEXT",
+  "objective": "Observe correction of a route detail across turns",
+  "authenticated": false,
+  "dataPolicy": "public",
+  "executionMode": "automated",
+  "messages": [
+    { "text": "I need a schedule from Singapore to Rotterdam" },
+    { "text": "Correction: the origin is Port Klang" }
+  ],
+  "captureTrace": false
+}

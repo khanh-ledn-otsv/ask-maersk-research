@@ -2,13 +2,12 @@ import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   analyzeEvidence,
-  DEFAULT_ANALYSIS_MODEL,
-  DEFAULT_REASONING_EFFORT,
   type Analyzer,
   type Finding,
   type ReasoningEffort,
 } from "../analysis/analyze-evidence.ts";
 import type { CaseEvidence } from "../domain/evidence.ts";
+import { formatAnalysisUsage, resolveAnalysisPolicy } from "./analysis-policy.ts";
 import { parseFlags } from "./parse-flags.ts";
 
 export interface AnalysisCliDependencies {
@@ -61,11 +60,11 @@ export async function runAnalysis(
     });
     await writeFile(findingPath, `${JSON.stringify(completedFinding, null, 2)}\n`, { flag: "wx" });
     dependencies.stdout(`Finding saved: ${findingPath}`);
-    dependencies.stdout(formatAnalysisUsage(completedFinding));
+    dependencies.stdout(formatFindingUsage(completedFinding));
     return 0;
   } catch (error: unknown) {
     if (typeof completedFinding !== "undefined") {
-      dependencies.stdout(formatAnalysisUsage(completedFinding));
+      dependencies.stdout(formatFindingUsage(completedFinding));
     }
     stderr(`Analysis failed: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
@@ -82,28 +81,10 @@ function parseAnalysisOptions(
   }
   const parsedFlags = parseFlags(flags, ["--model", "--reasoning-effort"]);
   if (!parsedFlags.ok) return parsedFlags;
-  const model =
-    parsedFlags.values.get("--model") ??
-    environment.RESEARCH_ANALYSIS_MODEL ??
-    DEFAULT_ANALYSIS_MODEL;
-  if (model.trim().length === 0) {
-    return { ok: false, message: "Analysis model must not be empty." };
-  }
-  const reasoningEffort =
-    parsedFlags.values.get("--reasoning-effort") ??
-    environment.RESEARCH_ANALYSIS_REASONING_EFFORT ??
-    DEFAULT_REASONING_EFFORT;
-  if (!isReasoningEffort(reasoningEffort)) {
-    return {
-      ok: false,
-      message: "Reasoning effort must be one of: none, low, medium, high, xhigh.",
-    };
-  }
-  return { ok: true, options: { model, reasoningEffort, runDirectory } };
-}
-
-function isReasoningEffort(value: string): value is ReasoningEffort {
-  return ["none", "low", "medium", "high", "xhigh"].includes(value);
+  const policy = resolveAnalysisPolicy(parsedFlags.values, environment);
+  return policy.ok
+    ? { ok: true, options: { ...policy.policy, runDirectory } }
+    : policy;
 }
 
 async function assertFindingDoesNotExist(findingPath: string): Promise<void> {
@@ -120,18 +101,12 @@ function isFileSystemError(error: unknown, code: string): error is NodeJS.ErrnoE
   return error instanceof Error && "code" in error && error.code === code;
 }
 
-function formatAnalysisUsage(finding: Finding): string {
-  const usage = finding.analysis.usage;
-  return [
-    `Analysis: model=${finding.analysis.model}`,
-    `reasoning=${finding.analysis.reasoningEffort}`,
-    `input=${formatTokenCount(usage?.inputTokens)}`,
-    `cached-input=${formatTokenCount(usage?.cachedInputTokens)}`,
-    `output=${formatTokenCount(usage?.outputTokens)}`,
-    `reasoning-tokens=${formatTokenCount(usage?.reasoningTokens)}`,
-  ].join(" ");
-}
-
-function formatTokenCount(value: number | undefined): string {
-  return typeof value === "undefined" ? "not-returned" : String(value);
+function formatFindingUsage(finding: Finding): string {
+  return formatAnalysisUsage(
+    {
+      model: finding.analysis.model,
+      reasoningEffort: finding.analysis.reasoningEffort,
+    },
+    finding.analysis.usage,
+  );
 }

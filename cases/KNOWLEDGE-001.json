@@ -1,0 +1,10 @@
+{
+  "id": "KNOWLEDGE-001",
+  "category": "KNOWLEDGE",
+  "objective": "Observe explanation of a common shipping charge",
+  "authenticated": false,
+  "dataPolicy": "public",
+  "executionMode": "automated",
+  "messages": [{ "text": "What is demurrage?" }],
+  "captureTrace": false
+}

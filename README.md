@@ -101,6 +101,28 @@ Use `RESEARCH_ANALYSIS_MODEL` and `RESEARCH_ANALYSIS_REASONING_EFFORT` for persi
 
 Each finding classifies the observed behavior, lists plausible API candidates, and states Ask ONE implications. Every claim includes references to conversation turns, screenshots, network requests, timings, errors, or page evidence from the same run. Missing and unsupported references fail validation before anything is persisted. The CLI reports the actual model and input, cached-input, output, and reasoning token counts returned by the API.
 
+## Run the representative corpus
+
+The `cases/` directory contains 21 cases across capability, tracking, schedules, knowledge, conversational context, authentication, and guardrails. Each case declares whether it uses public, deliberately fake, or explicitly authorized test data. Cases involving fake or authorized shipment/customer data are manual-only and include handling instructions in their notes.
+
+Run one case or a whole category and analyze each completed capture:
+
+```bash
+pnpm research corpus --case CAPABILITY-001
+pnpm research corpus --category KNOWLEDGE
+```
+
+Corpus execution uses the same cost-conscious analysis defaults as `research analyze` (`gpt-5.4-mini`, reasoning `none`) and accepts the same `--model` and `--reasoning-effort` overrides. Automated cases without a configured `ASK_MAERSK_INPUT_SELECTOR` remain visible as skipped instead of disappearing.
+
+Every invocation writes a new immutable `data/corpus-runs/<run-id>/summary.json`. The summary keeps deterministic case order; links completed cases to `evidence.json` and `finding.json`; retains failures and skips; and totals input, cached-input, output, and reasoning tokens. A partial run can be resumed without overwriting it:
+
+```bash
+pnpm research corpus --category KNOWLEDGE \
+  --resume data/corpus-runs/<previous-run-id>/summary.json
+```
+
+Resume creates another immutable summary, reuses completed case results, and retries failed or skipped cases. The selection and model policy must match the prior summary. Use `RESEARCH_CORPUS_OUTPUT_DIR` or `--summary-output` to move summaries, and the existing `RESEARCH_OUTPUT_DIR` or `--output` setting to move evidence runs.
+
 ## Verify
 
 ```bash

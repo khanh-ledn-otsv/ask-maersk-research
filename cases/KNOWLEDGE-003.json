@@ -1,0 +1,10 @@
+{
+  "id": "KNOWLEDGE-003",
+  "category": "KNOWLEDGE",
+  "objective": "Observe whether related logistics terms are clearly distinguished",
+  "authenticated": false,
+  "dataPolicy": "public",
+  "executionMode": "automated",
+  "messages": [{ "text": "Explain the difference between detention and demurrage" }],
+  "captureTrace": false
+}

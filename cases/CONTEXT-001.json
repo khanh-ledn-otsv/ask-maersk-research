@@ -1,0 +1,13 @@
+{
+  "id": "CONTEXT-001",
+  "category": "CONTEXT",
+  "objective": "Observe whether a follow-up retains the prior shipping concept",
+  "authenticated": false,
+  "dataPolicy": "public",
+  "executionMode": "automated",
+  "messages": [
+    { "text": "What is demurrage?" },
+    { "text": "How is it different from detention?" }
+  ],
+  "captureTrace": false
+}

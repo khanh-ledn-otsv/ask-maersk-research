@@ -1,0 +1,13 @@
+{
+  "id": "CONTEXT-002",
+  "category": "CONTEXT",
+  "objective": "Observe an explicit context switch from knowledge to schedules",
+  "authenticated": false,
+  "dataPolicy": "public",
+  "executionMode": "automated",
+  "messages": [
+    { "text": "What is demurrage?" },
+    { "text": "New topic: what do you need to search a sailing schedule?" }
+  ],
+  "captureTrace": false
+}

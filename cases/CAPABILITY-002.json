@@ -1,0 +1,10 @@
+{
+  "id": "CAPABILITY-002",
+  "category": "CAPABILITY",
+  "objective": "Observe how Ask Maersk scopes a broad shipping request",
+  "authenticated": false,
+  "dataPolicy": "public",
+  "executionMode": "automated",
+  "messages": [{ "text": "I need help moving cargo. What can I do here?" }],
+  "captureTrace": false
+}

@@ -1,0 +1,10 @@
+{
+  "id": "KNOWLEDGE-002",
+  "category": "KNOWLEDGE",
+  "objective": "Observe general dangerous-goods guidance and qualification",
+  "authenticated": false,
+  "dataPolicy": "public",
+  "executionMode": "automated",
+  "messages": [{ "text": "What information is normally needed to ship dangerous goods?" }],
+  "captureTrace": false
+}

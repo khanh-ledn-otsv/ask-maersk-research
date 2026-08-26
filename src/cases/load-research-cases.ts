@@ -12,6 +12,7 @@ const researchCaseSchema = z.strictObject({
   category: z.enum(RESEARCH_CATEGORIES),
   objective: nonEmptyText,
   authenticated: z.boolean().default(false),
+  dataPolicy: z.enum(["authorized", "fake", "public"]).default("public"),
   executionMode: z.enum(["automated", "manual"]),
   messages: z
     .array(z.strictObject({ text: nonEmptyText }))

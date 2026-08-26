@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { loadResearchCases } from "../src/cases/load-research-cases.ts";
+import { RESEARCH_CATEGORIES } from "../src/domain/research-case.ts";
 import { createTemporaryDirectoryTracker } from "./support/temp-directories.ts";
 
 const temporaryDirectories = createTemporaryDirectoryTracker();
@@ -31,6 +32,7 @@ describe("loadResearchCases", () => {
         category: "TRACKING",
         objective: "Observe clarification when a shipment identifier is missing",
         authenticated: false,
+        dataPolicy: "public",
         executionMode: "manual",
         messages: [
           { text: "Track my shipment" },
@@ -77,5 +79,25 @@ describe("loadResearchCases", () => {
     await expect(loadResearchCases(casesDirectory)).rejects.toThrow(
       'Duplicate research case ID "TRACK-001" in first.json and second.json.',
     );
+  });
+
+  test("ships a bounded representative corpus across every research category", async () => {
+    const cases = await loadResearchCases(join(process.cwd(), "cases"));
+
+    expect(cases.length).toBeGreaterThanOrEqual(15);
+    expect(cases.length).toBeLessThanOrEqual(25);
+    expect(new Set(cases.map(({ category }) => category))).toEqual(
+      new Set(RESEARCH_CATEGORIES),
+    );
+    const casesUsingControlledData = cases.filter(({ dataPolicy }) => dataPolicy !== "public");
+    expect(casesUsingControlledData.length).toBeGreaterThan(0);
+    expect(
+      casesUsingControlledData.every(({ executionMode }) => executionMode === "manual"),
+    ).toBe(true);
+    expect(
+      casesUsingControlledData.every(({ notes }) =>
+        /fake|authorized/iu.test(notes ?? ""),
+      ),
+    ).toBe(true);
   });
 });

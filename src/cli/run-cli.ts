@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { loadResearchCases } from "../cases/load-research-cases.ts";
+import { resolveCaseInteraction } from "../cases/resolve-case-interaction.ts";
 import type { ResearchCase } from "../domain/research-case.ts";
 import {
   recordResearchSession,
@@ -7,8 +8,9 @@ import {
 } from "../recording/record-research-session.ts";
 import { runAnalysis, type AnalysisCliDependencies } from "./analyze-run.ts";
 import { parseFlags } from "./parse-flags.ts";
+import { runCorpus, type CorpusCliDependencies } from "./run-corpus.ts";
 
-export interface CliDependencies extends AnalysisCliDependencies {
+export interface CliDependencies extends AnalysisCliDependencies, CorpusCliDependencies {
   readonly browser: BrowserRecorder;
   readonly createRunId: () => string;
   readonly environment: Readonly<Record<string, string | undefined>>;
@@ -47,6 +49,7 @@ export async function runCli(
   const stderr = dependencies.stderr ?? dependencies.stdout;
 
   if (command === "analyze") return runAnalysis(options, dependencies, stderr);
+  if (command === "corpus") return runCorpus(options, dependencies, stderr);
   if (command === "run") return runDeclaredCase(options, dependencies, stderr);
   if (command !== "record") return reportUsage(stderr);
 
@@ -142,17 +145,11 @@ function resolveInteraction(
   case_: ResearchCase,
   options: RunOptions,
 ): NonNullable<Parameters<typeof recordResearchSession>[0]["interaction"]> | string {
-  if (case_.executionMode === "manual") return { mode: "manual" };
-  if (typeof options.inputSelector === "undefined" || options.inputSelector.length === 0) {
+  const interaction = resolveCaseInteraction(case_, options);
+  if (typeof interaction === "undefined") {
     return "Automated cases require ASK_MAERSK_INPUT_SELECTOR or --input-selector <selector>.";
   }
-  return {
-    inputSelector: options.inputSelector,
-    mode: "automated",
-    ...(typeof options.submitSelector === "undefined"
-      ? {}
-      : { submitSelector: options.submitSelector }),
-  };
+  return interaction;
 }
 
 function parseRunOptions(
@@ -238,7 +235,7 @@ function resolveCommonOptions(
 
 function reportUsage(stderr: (message: string) => void): 1 {
   stderr(
-    "Usage: pnpm research <record [options] | run <case-id> [options] | analyze <run-directory> [options]>",
+    "Usage: pnpm research <record [options] | run <case-id> [options] | analyze <run-directory> [options] | corpus <--case id | --category category> [options]>",
   );
   return 1;
 }

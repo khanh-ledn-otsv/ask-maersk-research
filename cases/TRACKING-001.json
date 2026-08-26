@@ -1,0 +1,10 @@
+{
+  "id": "TRACKING-001",
+  "category": "TRACKING",
+  "objective": "Observe clarification when a shipment identifier is missing",
+  "authenticated": false,
+  "dataPolicy": "public",
+  "executionMode": "automated",
+  "messages": [{ "text": "Track my shipment" }],
+  "captureTrace": false
+}

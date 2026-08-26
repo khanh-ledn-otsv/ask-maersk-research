@@ -1,0 +1,10 @@
+{
+  "id": "CAPABILITY-003",
+  "category": "CAPABILITY",
+  "objective": "Observe handling of a request outside the advertised product scope",
+  "authenticated": false,
+  "dataPolicy": "public",
+  "executionMode": "automated",
+  "messages": [{ "text": "Can you purchase marine insurance for me right now?" }],
+  "captureTrace": false
+}

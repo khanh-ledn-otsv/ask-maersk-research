@@ -1,5 +1,6 @@
 node_modules/
 data/runs/
+data/corpus-runs/
 .env
 .research/
 playwright/.auth/

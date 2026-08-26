@@ -1,0 +1,10 @@
+{
+  "id": "CAPABILITY-001",
+  "category": "CAPABILITY",
+  "objective": "Map the capabilities Ask Maersk advertises to a first-time guest",
+  "authenticated": false,
+  "dataPolicy": "public",
+  "executionMode": "automated",
+  "messages": [{ "text": "What can you help me with?" }],
+  "captureTrace": false
+}

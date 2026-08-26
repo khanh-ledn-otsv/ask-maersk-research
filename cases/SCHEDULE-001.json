@@ -1,0 +1,10 @@
+{
+  "id": "SCHEDULE-001",
+  "category": "SCHEDULE",
+  "objective": "Observe the information requested to search a port-to-port schedule",
+  "authenticated": false,
+  "dataPolicy": "public",
+  "executionMode": "automated",
+  "messages": [{ "text": "Find a sailing schedule from Singapore to Rotterdam" }],
+  "captureTrace": false
+}

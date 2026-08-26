@@ -453,6 +453,91 @@ describe("research CLI", () => {
       'Duplicate research case ID "TRACK-001" in TRACK-001.json and duplicate.json.',
     ]);
   });
+
+  test("corpus runs a category, continues after failure, and writes an aggregate summary", async () => {
+    const casesDirectory = await temporaryDirectories.create("maersk-cases-");
+    const outputRoot = await temporaryDirectories.create("maersk-corpus-runs-");
+    const summaryRoot = await temporaryDirectories.create("maersk-corpus-summaries-");
+    for (const id of ["TRACK-002", "TRACK-001", "TRACK-003"]) {
+      await writeResearchCase(casesDirectory, {
+        id,
+        category: "TRACKING",
+        objective: `Observe ${id}`,
+        executionMode: "automated",
+        messages: [{ text: `Track fake identifier ${id}` }],
+      });
+    }
+    let captureCount = 0;
+    const browser: BrowserRecorder = {
+      async capture(input) {
+        captureCount += 1;
+        if (captureCount === 2) throw new Error("browser unavailable");
+        return createBrowser(async () => undefined).capture(input);
+      },
+    };
+    let id = 0;
+    const output: string[] = [];
+
+    const exitCode = await runCli(["corpus", "--category", "TRACKING"], {
+      browser,
+      createAnalyzer: () => ({
+        async analyze(request) {
+          return {
+            model: request.model,
+            output: {
+              sourceRunId: request.evidence.runId,
+              behavior: {
+                classification: "clarification",
+                claim: "Ask Maersk requests a shipment identifier.",
+                evidenceReferences: [{ kind: "conversation", locator: "1" }],
+              },
+              apiCandidates: [],
+              askOneImplications: [
+                {
+                  claim: "Ask ONE should collect an identifier first.",
+                  evidenceReferences: [{ kind: "conversation", locator: "1" }],
+                },
+              ],
+            },
+            usage: { inputTokens: 50, outputTokens: 10 },
+          };
+        },
+      }),
+      createCorpusRunId: () => "tracking-corpus",
+      createRunId: () => `case-${++id}`,
+      environment: {
+        ASK_MAERSK_INPUT_SELECTOR: "[data-testid=question]",
+        ASK_MAERSK_URL: "https://example.test/ask-maersk",
+        OPEN_AI_API_KEY: "test-api-key",
+        RESEARCH_CASES_DIR: casesDirectory,
+        RESEARCH_CORPUS_OUTPUT_DIR: summaryRoot,
+        RESEARCH_OUTPUT_DIR: outputRoot,
+      },
+      now: () => new Date("2026-08-26T08:00:00.000Z"),
+      stdout: (message) => output.push(message),
+      waitForCompletion: async () => undefined,
+    });
+
+    expect(exitCode).toBe(1);
+    const summaryPath = join(
+      summaryRoot,
+      "2026-08-26_080000_tracking-corpus",
+      "summary.json",
+    );
+    const summary = JSON.parse(await readFile(summaryPath, "utf8")) as {
+      aggregateUsage: { inputTokens: number; outputTokens: number };
+      cases: { caseId: string; status: string; evidencePath?: string; findingPath?: string }[];
+    };
+    expect(summary.cases.map(({ caseId, status }) => [caseId, status])).toEqual([
+      ["TRACK-001", "completed"],
+      ["TRACK-002", "failed"],
+      ["TRACK-003", "completed"],
+    ]);
+    expect(summary.cases[0]?.evidencePath).toMatch(/evidence\.json$/u);
+    expect(summary.cases[0]?.findingPath).toMatch(/finding\.json$/u);
+    expect(summary.aggregateUsage).toEqual({ inputTokens: 100, outputTokens: 20 });
+    expect(output).toContain(`Corpus summary saved: ${summaryPath}`);
+  });
 });
 
 type CaptureInput = Parameters<BrowserRecorder["capture"]>[0];
