@@ -4,9 +4,9 @@
 
 **Blocked by:** 01: Record one complete manual Ask Maersk interaction.
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Requests, responses, failures, status codes, bodies, and durations are correlated into coherent network evidence.
-- [ ] Functional traffic such as XHR, fetch, GraphQL, SSE, WebSocket, and POST activity is prioritized while static assets and telemetry are excluded from interesting evidence.
-- [ ] Errors, login walls, modals, and unexpected states trigger additional screenshots and recorded errors without losing the rest of the run.
-- [ ] Tests verify useful traffic is retained while known noise is filtered and failures preserve diagnostic evidence.
+- [x] Requests, responses, failures, status codes, bodies, and durations are correlated into coherent network evidence.
+- [x] Functional traffic such as XHR, fetch, GraphQL, SSE, WebSocket, and POST activity is prioritized while static assets and telemetry are excluded from interesting evidence.
+- [x] Errors, login walls, modals, and unexpected states trigger additional screenshots and recorded errors without losing the rest of the run.
+- [x] Tests verify useful traffic is retained while known noise is filtered and failures preserve diagnostic evidence.
