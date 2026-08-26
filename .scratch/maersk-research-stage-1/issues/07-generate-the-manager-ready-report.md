@@ -4,11 +4,15 @@
 
 **Blocked by:** 06: Build and run the representative research corpus.
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] The report contains a capability map, representative user journeys, observed architecture patterns, strengths and weaknesses, and Ask ONE implications.
-- [ ] A primary matrix connects each case’s observation, evidence, architecture inference, and Ask ONE implication.
-- [ ] Every reported factual observation links to captured evidence, and unsupported findings are omitted or explicitly marked uncertain.
-- [ ] The report summarizes model usage and analysis cost.
-- [ ] The output highlights the strongest 8–12 screenshots, 2–3 useful network/API examples, and 5–10 concrete Ask ONE lessons when the corpus contains them.
-- [ ] Tests verify deterministic report structure, escaping, missing evidence handling, and useful output from partial runs.
+- [x] The report contains a capability map, representative user journeys, observed architecture patterns, strengths and weaknesses, and Ask ONE implications.
+- [x] A primary matrix connects each case’s observation, evidence, architecture inference, and Ask ONE implication.
+- [x] Every reported factual observation links to captured evidence, and unsupported findings are omitted or explicitly marked uncertain.
+- [x] The report summarizes model usage and analysis cost.
+- [x] The output highlights the strongest 8–12 screenshots, 2–3 useful network/API examples, and 5–10 concrete Ask ONE lessons when the corpus contains them.
+- [x] Tests verify deterministic report structure, escaping, missing evidence handling, and useful output from partial runs.
+
+## Comments
+
+- 2026-08-26: Added the offline `research report` CLI workflow, deterministic manager-ready Markdown synthesis, evidence-linked matrices and highlights, uncertainty handling, actual model/token-cost reporting, and partial-run degradation. Typecheck and all 48 tests pass.

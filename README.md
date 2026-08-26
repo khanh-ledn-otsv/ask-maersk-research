@@ -123,6 +123,16 @@ pnpm research corpus --category KNOWLEDGE \
 
 Resume creates another immutable summary, reuses completed case results, and retries failed or skipped cases. The selection and model policy must match the prior summary. Use `RESEARCH_CORPUS_OUTPUT_DIR` or `--summary-output` to move summaries, and the existing `RESEARCH_OUTPUT_DIR` or `--output` setting to move evidence runs.
 
+## Generate the manager-ready report
+
+Turn a corpus summary into a concise, evidence-linked Markdown report:
+
+```bash
+pnpm research report data/corpus-runs/<run-id>/summary.json
+```
+
+The default output is `reports/maersk-research.md`. Use `--output <path>` or `RESEARCH_REPORT_PATH` to choose another file. Report generation is offline and does not require an API key. It includes the capability map, representative journeys, primary evidence matrix, architecture patterns, strengths and weaknesses, Ask ONE implications, selected screenshot and network examples, model/token usage, and explicit evidence gaps. Existing report files are not overwritten.
+
 ## Verify
 
 ```bash

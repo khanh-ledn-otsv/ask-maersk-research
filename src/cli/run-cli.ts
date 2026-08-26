@@ -9,6 +9,7 @@ import {
 import { runAnalysis, type AnalysisCliDependencies } from "./analyze-run.ts";
 import { parseFlags } from "./parse-flags.ts";
 import { runCorpus, type CorpusCliDependencies } from "./run-corpus.ts";
+import { runReport } from "./run-report.ts";
 
 export interface CliDependencies extends AnalysisCliDependencies, CorpusCliDependencies {
   readonly browser: BrowserRecorder;
@@ -50,6 +51,7 @@ export async function runCli(
 
   if (command === "analyze") return runAnalysis(options, dependencies, stderr);
   if (command === "corpus") return runCorpus(options, dependencies, stderr);
+  if (command === "report") return runReport(options, dependencies, stderr);
   if (command === "run") return runDeclaredCase(options, dependencies, stderr);
   if (command !== "record") return reportUsage(stderr);
 
@@ -235,7 +237,7 @@ function resolveCommonOptions(
 
 function reportUsage(stderr: (message: string) => void): 1 {
   stderr(
-    "Usage: pnpm research <record [options] | run <case-id> [options] | analyze <run-directory> [options] | corpus <--case id | --category category> [options]>",
+    "Usage: pnpm research <record [options] | run <case-id> [options] | analyze <run-directory> [options] | corpus <--case id | --category category> [options] | report <corpus-summary> [options]>",
   );
   return 1;
 }
