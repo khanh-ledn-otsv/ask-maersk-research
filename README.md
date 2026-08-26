@@ -32,7 +32,7 @@ Each run contains:
 - `conversation.json`: the known user prompt and captured assistant text
 - `metadata.json`: run and page metadata
 - `screenshots/01-start.png` and `screenshots/02-result.png`
-- `network/requests.jsonl`: redacted XHR/fetch evidence
+- `network/requests.jsonl`: correlated functional network evidence
 
 Override the configured URL, output directory, or known prompt when needed:
 
@@ -40,7 +40,7 @@ Override the configured URL, output directory, or known prompt when needed:
 pnpm research record --url https://example.test/ask-maersk --output data/runs --message "Track my shipment"
 ```
 
-Sensitive URL parameters, headers, structured body keys, recognizable token strings, and values listed in the comma-separated `ASK_MAERSK_CUSTOMER_IDENTIFIERS` setting are redacted in memory before JSON or JSONL is written. Screenshots black out form fields, observed user-message text, configured customer identifiers, and every element matched by `ASK_MAERSK_SENSITIVE_SELECTOR`. Configure these settings for the target UI, and continue to use fake or authorized test data because no generic image redactor can recognize every customer-specific value.
+This exploratory recorder stores captured text, screenshots, and network values as observed. Use only public guest flows with fake or otherwise non-sensitive test data, and keep run directories local.
 
 ## Verify
 

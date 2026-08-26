@@ -29,8 +29,6 @@ Capture Evidence
 Text Screenshot Network Timing
  └────┼──────┴────────┘
       ↓
-   Redaction
-      ↓
 OpenAI Extraction
       ↓
 Structured Finding
@@ -101,8 +99,7 @@ maersk-research/
 │   │
 │   ├── network/
 │   │   ├── recorder.ts
-│   │   ├── filter.ts
-│   │   └── redact.ts
+│   │   └── filter.ts
 │   │
 │   ├── cases/
 │   │   ├── loader.ts
@@ -408,57 +405,11 @@ Still keep a minimal raw request log if useful for debugging.
 
 ---
 
-# 11. Redaction must happen before disk and AI
+# 11. Evidence is stored as observed
 
-Create this immediately:
+This is an exploratory guest-flow spike. Persist text, screenshots, and network evidence as the browser observes them so that researchers can inspect the actual behavior without a lossy transformation layer.
 
-```ts
-redactHeaders(headers)
-redactJson(body)
-redactUrl(url)
-```
-
-Sensitive keys:
-
-```text
-authorization
-cookie
-set-cookie
-x-api-key
-access_token
-refresh_token
-jwt
-session
-csrf
-password
-secret
-```
-
-Also redact customer-specific data if you're testing with real internal/test accounts.
-
-The flow should be:
-
-```text
-Browser
-   ↓
-RAW IN MEMORY
-   ↓
-Redactor
-   ↓
-Persisted evidence
-   ↓
-OpenAI
-```
-
-Not:
-
-```text
-raw secret
-   ↓
-disk / OpenAI
-   ↓
-redact later
-```
+Use only public guest flows with fake or otherwise non-sensitive test data, and keep captured run directories local. Do not use real customer identifiers or authenticated production workflows in Stage 1.
 
 ---
 
@@ -767,7 +718,7 @@ Build in this order; don't jump ahead.
 | **M1 — Browser** | Launch persistent Playwright Chromium and open Ask Maersk | You can manually interact |
 | **M2 — Evidence** | Conversation + screenshots + metadata | One interaction creates a complete evidence directory |
 | **M3 — Network** | Request/response recorder + filtering | Relevant XHR/fetch calls visible |
-| **M4 — Security** | Redaction | Secrets never reach persisted data |
+| **M4 — Diagnostics** | Exceptional-state screenshots and errors | Failures remain inspectable without losing the run |
 | **M5 — Cases** | JSON/Zod research cases + runner | `run TRACK-001` works |
 | **M6 — Multi-turn** | Sequential prompts | Follow-up/context cases work |
 | **M7 — AI** | `ResearchAnalyzer` + OpenAI | Evidence → validated structured finding |
@@ -828,12 +779,11 @@ Only build these:
 2. screenshots
 3. conversation capture
 4. network capture
-5. secret redaction
-6. research cases
-7. basic timing
-8. OpenAI structured extraction
-9. Markdown report
-10. ~20 representative cases
+5. research cases
+6. basic timing
+7. OpenAI structured extraction
+8. Markdown report
+9. ~20 representative cases
 
 Do **not** build:
 
@@ -882,7 +832,7 @@ I would declare the spike finished once you have:
 
 ✓ 2–3 useful network/API examples
 
-✓ secrets automatically redacted
+✓ all runs use fake or otherwise non-sensitive test data
 
 ✓ findings generated with evidence references
 
@@ -919,8 +869,6 @@ You manually ask:
           ├──── record XHR/fetch
           └──── record timing
           │
-          ▼
-redact()
           │
           ▼
 evidence.json

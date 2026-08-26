@@ -137,50 +137,6 @@ describe("Playwright browser recorder", () => {
     }
   });
 
-  test("masks configured customer identifiers embedded in visible text", async () => {
-    const customerIdentifier = "CUSTOMER-123456";
-    const server = createServer((_request, response) => {
-      response.writeHead(200, { "content-type": "text/html" });
-      response.end(`<!doctype html>
-        <html>
-          <head>
-            <title>Sensitive screenshot fixture</title>
-            <style>
-              body { margin: 0; background: white; }
-              .customer { position: fixed; left: 100px; top: 100px; width: 300px; height: 40px; }
-            </style>
-          </head>
-          <body>
-            <main>Answer ready</main>
-            <div class="customer">Shipment ${customerIdentifier} is delayed</div>
-          </body>
-        </html>`);
-    });
-
-    const port = await listen(server);
-    const userDataDirectory = await temporaryDirectories.create("maersk-mask-profile-");
-
-    try {
-      const recorder = createPlaywrightBrowserRecorder({
-        assistantSelector: "main",
-        headless: true,
-        userDataDirectory,
-      });
-      const capture = await recorder.capture({
-        expectedUserMessage: "Inspect masking",
-        sensitiveValues: [customerIdentifier],
-        targetUrl: `http://127.0.0.1:${port}/`,
-        waitForCompletion: async () => undefined,
-      });
-
-      expect(await readPngPixel(capture.screenshots[1]?.data, 200, 120)).toEqual([
-        0, 0, 0, 255,
-      ]);
-    } finally {
-      await close(server);
-    }
-  });
-
   test("retains coherent functional traffic while excluding static assets and telemetry", async () => {
     const graphQlObserved = Promise.withResolvers<void>();
     const delayedRequestObserved = Promise.withResolvers<void>();
@@ -435,7 +391,6 @@ describe("Playwright browser recorder", () => {
               body { margin: 0; background: white; }
               #error-banner { position: fixed; left: 500px; top: 100px; width: 100px; height: 40px; background: red; }
               [role="dialog"] { position: fixed; left: 700px; top: 100px; width: 300px; height: 40px; background: white; }
-              #split-secret { position: fixed; left: 1050px; top: 100px; width: 200px; height: 40px; background: white; }
             </style>
           </head>
           <body>
@@ -444,9 +399,8 @@ describe("Playwright browser recorder", () => {
               <textarea>Track shipment</textarea>
               <button type="submit">Send</button>
             </form>
-            <form action="/login"><input type="password" value="password-value"></form>
-            <section role="dialog" aria-modal="true">Session expired. Authorization: Bearer visible-secret</section>
-            <div id="split-secret"><span>Password:</span><strong>hunter2</strong></div>
+            <form action="/login"><input type="password"></form>
+            <section role="dialog" aria-modal="true">Session expired</section>
             <script>
               const form = document.querySelector('#chat-form');
               form.addEventListener('submit', (event) => event.preventDefault());
@@ -489,12 +443,6 @@ describe("Playwright browser recorder", () => {
       expect(capture.screenshots.slice(2).every(({ kind }) => kind === "error")).toBe(true);
       expect(await readPngPixel(capture.screenshots[2]?.data, 550, 120)).toEqual([
         255, 0, 0, 255,
-      ]);
-      expect(await readPngPixel(capture.screenshots[3]?.data, 750, 120)).toEqual([
-        0, 0, 0, 255,
-      ]);
-      expect(await readPngPixel(capture.screenshots[3]?.data, 1100, 120)).toEqual([
-        0, 0, 0, 255,
       ]);
     } finally {
       await close(server);
@@ -539,7 +487,7 @@ describe("Playwright browser recorder", () => {
               const form = document.querySelector('#chat-form');
               form.addEventListener('submit', (event) => {
                 event.preventDefault();
-                fetch('/api?access_token=browser-secret', {
+                fetch('/api?source=browser-test', {
                   method: 'POST',
                   headers: { 'content-type': 'application/json' },
                   body: JSON.stringify({ question: 'Track my shipment' })
@@ -608,7 +556,7 @@ describe("Playwright browser recorder", () => {
             method: "POST",
             resourceType: "fetch",
             status: 200,
-            url: `http://127.0.0.1:${port}/api?access_token=browser-secret`,
+            url: `http://127.0.0.1:${port}/api?source=browser-test`,
           }),
           expect.objectContaining({ status: 503, url: `http://127.0.0.1:${port}/failed` }),
           expect.objectContaining({

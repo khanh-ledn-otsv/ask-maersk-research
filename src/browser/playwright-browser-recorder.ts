@@ -18,7 +18,6 @@ import type {
   BrowserRecorder,
   BrowserRecordingInput,
 } from "../recording/record-research-session.ts";
-import { SENSITIVE_TEXT_PATTERN_SOURCES } from "../security/redaction.ts";
 
 const FUNCTIONAL_RESOURCE_TYPES = new Set(["eventsource", "fetch", "xhr"]);
 const TELEMETRY_DOMAINS = [
@@ -41,7 +40,6 @@ export interface PlaywrightBrowserRecorderOptions {
   readonly headless?: boolean;
   readonly now?: () => Date;
   readonly resultSelector?: string;
-  readonly sensitiveSelector?: string;
   readonly userDataDirectory: string;
 }
 
@@ -95,9 +93,6 @@ export function createPlaywrightBrowserRecorder(
     options.assistantSelector ??
     '.mc-c-ask-maersk, [data-message-author-role="assistant"], [data-role="assistant"], [data-testid*="assistant"], main';
   const resultSelector = options.resultSelector ?? ".mc-c-ask-maersk";
-  const sensitiveSelector =
-    options.sensitiveSelector ?? 'input, textarea, [data-sensitive="true"]';
-
   return {
     async capture(input) {
       return captureWithPlaywright(input, {
@@ -105,7 +100,6 @@ export function createPlaywrightBrowserRecorder(
         headless: options.headless ?? false,
         now,
         resultSelector,
-        sensitiveSelector,
         userDataDirectory: options.userDataDirectory,
       });
     },
@@ -117,7 +111,6 @@ interface ResolvedOptions {
   readonly headless: boolean;
   readonly now: () => Date;
   readonly resultSelector: string;
-  readonly sensitiveSelector: string;
   readonly userDataDirectory: string;
 }
 
@@ -131,10 +124,8 @@ async function captureWithPlaywright(
   });
   const page = context.pages()[0] ?? (await context.newPage());
   const interaction = await startInteractionCapture(page, options.now);
-  const sensitiveTexts = (): readonly string[] =>
-    buildSensitiveTexts(interaction.submissions(), input.sensitiveValues);
   const pageErrors = startBrowserErrorCapture(context, options.now, (errorPage) =>
-    takeMaskedScreenshot(errorPage, options.sensitiveSelector, sensitiveTexts()),
+    takeScreenshot(errorPage),
   );
   const eventSourceObservations = await startEventSourceCapture(context, options.now);
   const networkCapture = startNetworkCapture(context, options.now, eventSourceObservations);
@@ -142,11 +133,7 @@ async function captureWithPlaywright(
   try {
     await page.goto(input.targetUrl, { waitUntil: "domcontentloaded" });
     const recordingStartedAt = options.now();
-    const startScreenshot = await takeMaskedScreenshot(
-      page,
-      options.sensitiveSelector,
-      sensitiveTexts(),
-    );
+    const startScreenshot = await takeScreenshot(page);
 
     await input.waitForCompletion();
 
@@ -159,11 +146,7 @@ async function captureWithPlaywright(
       completedAt,
     );
     const assistantText = await readAssistantText(resultPage, options.assistantSelector);
-    const resultScreenshot = await takeMaskedScreenshot(
-      resultPage,
-      options.sensitiveSelector,
-      sensitiveTexts(),
-    );
+    const resultScreenshot = await takeScreenshot(resultPage);
     const network = await networkCapture.finish();
     const conversation = buildConversation(
       interaction.submissions(),
@@ -182,12 +165,7 @@ async function captureWithPlaywright(
       ...lateErrors,
     ].toSorted((left, right) => left.timestamp.localeCompare(right.timestamp));
     const eventScreenshots = await pageErrors.screenshots();
-    const lateScreenshots = await captureRepeatedScreenshots(
-      resultPage,
-      lateErrors.length,
-      options.sensitiveSelector,
-      sensitiveTexts(),
-    );
+    const lateScreenshots = await captureRepeatedScreenshots(resultPage, lateErrors.length);
     const diagnosticScreenshots = [...eventScreenshots, ...lateScreenshots].map(
       (data, index) => ({
         filename: `${String(index + 3).padStart(2, "0")}-error.png`,
@@ -219,22 +197,13 @@ async function captureWithPlaywright(
   }
 }
 
-function buildSensitiveTexts(
-  submissions: readonly UserSubmission[],
-  configuredValues: readonly string[] = [],
-): readonly string[] {
-  return [...submissions.map(({ text }) => text), ...configuredValues];
-}
-
 async function captureRepeatedScreenshots(
   page: Page,
   count: number,
-  sensitiveSelector: string,
-  sensitiveTexts: readonly string[],
 ): Promise<readonly Buffer[]> {
   const screenshots: Buffer[] = [];
   for (let index = 0; index < count; index += 1) {
-    screenshots.push(await takeMaskedScreenshot(page, sensitiveSelector, sensitiveTexts));
+    screenshots.push(await takeScreenshot(page));
   }
   return screenshots;
 }
@@ -898,99 +867,8 @@ async function readAssistantText(page: Page, selector: string): Promise<string> 
   return (await page.locator("body").innerText()).trim();
 }
 
-async function takeMaskedScreenshot(
-  page: Page,
-  sensitiveSelector: string,
-  sensitiveTexts: readonly string[],
-): Promise<Buffer> {
-  const credentialMask = await markCredentialText(page);
-  const masks: Locator[] = [
-    page.locator(sensitiveSelector),
-    credentialMask.locator,
-    ...sensitiveTexts
-      .filter((text) => text.length > 0)
-      .map((text) => page.getByText(text, { exact: false })),
-  ];
-  try {
-    return await page.screenshot({
-      fullPage: false,
-      mask: masks,
-      maskColor: "#000000",
-      type: "png",
-    });
-  } finally {
-    await credentialMask.cleanup();
-  }
-}
-
-async function markCredentialText(page: Page): Promise<{
-  readonly cleanup: () => Promise<void>;
-  readonly locator: Locator;
-}> {
-  const attribute = "data-ask-maersk-sensitive-text";
-  const marker = `${Date.now()}-${Math.random()}`;
-  await page.locator("body").evaluate(
-    (body, { attribute, marker, patternSources }) => {
-      const findMatches = (text: string): readonly string[] =>
-        patternSources.flatMap((source) =>
-          Array.from(text.matchAll(new RegExp(source, "giu")), ([match]) => match.toLowerCase()),
-        );
-      const matchCounts = (matches: readonly string[]): ReadonlyMap<string, number> => {
-        const counts = new Map<string, number>();
-        for (const match of matches) counts.set(match, (counts.get(match) ?? 0) + 1);
-        return counts;
-      };
-      const covers = (available: readonly string[], required: readonly string[]): boolean => {
-        const availableCounts = matchCounts(available);
-        return [...matchCounts(required)].every(
-          ([match, count]) => (availableCounts.get(match) ?? 0) >= count,
-        );
-      };
-      const depth = (element: Element): number => {
-        let value = 0;
-        for (let parent = element.parentElement; parent !== null; parent = parent.parentElement) {
-          value += 1;
-        }
-        return value;
-      };
-      const matches = new Map<HTMLElement, readonly string[]>();
-      const candidates = [body, ...body.querySelectorAll("*")]
-        .filter(
-          (element): element is HTMLElement =>
-            element instanceof HTMLElement && element.getClientRects().length > 0,
-        )
-        .filter((element) => {
-          const found = findMatches(element.innerText);
-          if (found.length === 0) return false;
-          matches.set(element, found);
-          return true;
-        })
-        .toSorted((left, right) => depth(right) - depth(left));
-      const selected: HTMLElement[] = [];
-      for (const candidate of candidates) {
-        const selectedDescendants = selected.filter((element) => candidate.contains(element));
-        const coveredMatches = selectedDescendants.flatMap((element) => matches.get(element) ?? []);
-        if (covers(coveredMatches, matches.get(candidate) ?? [])) continue;
-        for (const descendant of selectedDescendants) {
-          selected.splice(selected.indexOf(descendant), 1);
-        }
-        selected.push(candidate);
-      }
-      for (const element of selected) element.setAttribute(attribute, marker);
-    },
-    { attribute, marker, patternSources: SENSITIVE_TEXT_PATTERN_SOURCES },
-  );
-  const locator = page.locator(`[${attribute}="${marker}"]`);
-  return {
-    locator,
-    async cleanup() {
-      await locator
-        .evaluateAll((elements, attribute) => {
-          for (const element of elements) element.removeAttribute(attribute);
-        }, attribute)
-        .catch(() => undefined);
-    },
-  };
+async function takeScreenshot(page: Page): Promise<Buffer> {
+  return page.screenshot({ fullPage: false, type: "png" });
 }
 
 function isUserSubmission(value: unknown): value is UserSubmission {

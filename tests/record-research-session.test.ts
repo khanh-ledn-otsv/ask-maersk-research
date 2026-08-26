@@ -12,14 +12,14 @@ const temporaryDirectories = createTemporaryDirectoryTracker();
 afterEach(() => temporaryDirectories.cleanup());
 
 describe("recordResearchSession", () => {
-  test("persists a complete redacted evidence record that does not require AI", async () => {
+  test("persists a complete evidence record that does not require AI", async () => {
     const outputRoot = await temporaryDirectories.create("maersk-research-");
 
     const browser: BrowserRecorder = {
       async capture() {
         return {
           page: {
-            url: "https://example.test/chat?access_token=secret-token",
+            url: "https://example.test/chat?mode=guest",
             title: "Ask Maersk",
           },
           conversation: [
@@ -46,16 +46,15 @@ describe("recordResearchSession", () => {
               id: "request-1",
               timestamp: "2026-08-25T16:00:01.000Z",
               method: "POST",
-              url: "https://example.test/api?access_token=secret-token",
+              url: "https://example.test/api?mode=guest",
               resourceType: "fetch",
               status: 200,
               requestHeaders: {
-                authorization: "Bearer secret-token",
                 "content-type": "application/json",
-                "x-api-key": "opaque-api-key",
+                "x-client-id": "research-fixture",
               },
-              requestBody: { question: "Track my shipment", password: "secret-password" },
-              responseHeaders: { "set-cookie": "opaque-session-cookie" },
+              requestBody: { question: "Track my shipment", locale: "en" },
+              responseHeaders: { "x-request-id": "request-1" },
               responseBody: { answer: "Please provide a shipment identifier." },
               durationMs: 125,
             },
@@ -119,16 +118,15 @@ describe("recordResearchSession", () => {
           id: "request-1",
           timestamp: "2026-08-25T16:00:01.000Z",
           method: "POST",
-          url: "https://example.test/api?access_token=%5BREDACTED%5D",
+          url: "https://example.test/api?mode=guest",
           resourceType: "fetch",
           status: 200,
           requestHeaders: {
-            authorization: "[REDACTED]",
             "content-type": "application/json",
-            "x-api-key": "[REDACTED]",
+            "x-client-id": "research-fixture",
           },
-          requestBody: { question: "Track my shipment", password: "[REDACTED]" },
-          responseHeaders: { "set-cookie": "[REDACTED]" },
+          requestBody: { question: "Track my shipment", locale: "en" },
+          responseHeaders: { "x-request-id": "request-1" },
           responseBody: { answer: "Please provide a shipment identifier." },
           durationMs: 125,
         },
@@ -138,17 +136,12 @@ describe("recordResearchSession", () => {
         completedResponseMs: 1_000,
       },
       page: {
-        url: "https://example.test/chat?access_token=%5BREDACTED%5D",
+        url: "https://example.test/chat?mode=guest",
         title: "Ask Maersk",
       },
       errors: [],
     });
 
-    const persistedText = await readAllText(result.runDirectory);
-    expect(persistedText).not.toContain("secret-token");
-    expect(persistedText).not.toContain("secret-password");
-    expect(persistedText).not.toContain("opaque-api-key");
-    expect(persistedText).not.toContain("opaque-session-cookie");
     expect(await readFile(join(result.runDirectory, "screenshots/01-start.png"))).toEqual(
       Buffer.from("start-image"),
     );
@@ -202,118 +195,4 @@ describe("recordResearchSession", () => {
     expect(await readdir(runDirectory)).toEqual([]);
   });
 
-  test("redacts configured customer identifiers and secrets from every persisted text artifact", async () => {
-    const outputRoot = await temporaryDirectories.create("maersk-research-sensitive-");
-    const customerIdentifier = "CUSTOMER-123456";
-    const browser: BrowserRecorder = {
-      async capture() {
-        return {
-          page: {
-            url: `https://example.test/customers/${customerIdentifier}?reference=${customerIdentifier}`,
-            title: `Ask Maersk for ${customerIdentifier}`,
-          },
-          conversation: [
-            {
-              index: 0,
-              role: "user",
-              text: `Track shipment for ${customerIdentifier}`,
-              timestamp: "2026-08-25T16:00:00.000Z",
-            },
-          ],
-          screenshots: [],
-          network: [
-            {
-              id: "request-1",
-              timestamp: "2026-08-25T16:00:00.000Z",
-              method: "POST",
-              url: `https://api-user:api-password@example.test/graphql/${customerIdentifier}#access_token=fragment-token`,
-              resourceType: "fetch",
-              requestHeaders: {
-                Authorization: "Bearer bearer-credential",
-                Cookie: "session=session-cookie-value",
-                "X-CSRF-Token": "csrf-value",
-              },
-              requestBody: {
-                apiKey: "api-key-value",
-                customer: customerIdentifier,
-                variables: { sessionId: "session-id-value" },
-              },
-              responseBody: {
-                customer: customerIdentifier,
-                refreshToken: "refresh-token-value",
-              },
-              failure: `Request failed for ${customerIdentifier} with password=hunter2 token=plain-token`,
-              frames: [
-                {
-                  direction: "sent",
-                  timestamp: "2026-08-25T16:00:00.500Z",
-                  payload: Buffer.from(customerIdentifier).toString("base64"),
-                  payloadEncoding: "base64",
-                },
-              ],
-            },
-          ],
-          timings: { submittedAt: "2026-08-25T16:00:00.000Z" },
-          errors: [
-            {
-              timestamp: "2026-08-25T16:00:01.000Z",
-              message: `Login wall for ${customerIdentifier}; Cookie: session-cookie-value`,
-              source: "browser",
-            },
-          ],
-        };
-      },
-    };
-
-    const result = await recordResearchSession(
-      {
-        outputRoot,
-        sensitiveValues: [customerIdentifier],
-        targetUrl: "https://example.test/",
-        userMessage: `Track shipment for ${customerIdentifier}`,
-        waitForCompletion: async () => undefined,
-      },
-      {
-        browser,
-        createRunId: () => "sensitive",
-        now: () => new Date("2026-08-25T16:00:00.000Z"),
-      },
-    );
-
-    const persistedText = await readAllText(result.runDirectory);
-    for (const secret of [
-      customerIdentifier,
-      "bearer-credential",
-      "session-cookie-value",
-      "csrf-value",
-      "api-key-value",
-      "session-id-value",
-      "refresh-token-value",
-      "hunter2",
-      "api-user",
-      "api-password",
-      "fragment-token",
-      "plain-token",
-      Buffer.from(customerIdentifier).toString("base64"),
-    ]) {
-      expect(persistedText).not.toContain(secret);
-    }
-    expect(persistedText).toContain("[REDACTED]");
-  });
 });
-
-async function readAllText(directory: string): Promise<string> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const chunks: string[] = [];
-
-  for (const entry of entries) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) {
-      chunks.push(await readAllText(path));
-    } else if (entry.name.endsWith(".json") || entry.name.endsWith(".jsonl")) {
-      chunks.push(await readFile(path, "utf8"));
-    }
-  }
-
-  return chunks.join("\n");
-}

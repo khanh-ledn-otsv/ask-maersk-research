@@ -64,7 +64,6 @@ describe("research CLI", () => {
       "utf8",
     );
     expect(evidence).toContain("Track my shipment");
-    expect(evidence).not.toContain("OPENAI_API_KEY");
   });
 
   test("record reports missing target configuration without launching a browser", async () => {

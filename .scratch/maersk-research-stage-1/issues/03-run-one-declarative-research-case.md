@@ -2,7 +2,7 @@
 
 **What to build:** Let a researcher describe a question as validated data and run it by case ID. The same case format must support both automated interaction and researcher-controlled manual interaction, and both modes must produce the established evidence format.
 
-**Blocked by:** 02: Make recorded evidence safe and diagnostically reliable.
+**Blocked by:** 02: Make recorded evidence diagnostically reliable.
 
 **Status:** ready-for-agent
 

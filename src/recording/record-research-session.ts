@@ -5,13 +5,6 @@ import type {
   ScreenshotEvidence,
 } from "../domain/evidence.ts";
 import { persistRun } from "../persistence/run-store.ts";
-import {
-  redactConversationTurn,
-  redactNetworkEvidence,
-  redactRecordedError,
-  redactText,
-  redactUrl,
-} from "../security/redaction.ts";
 
 export interface BrowserRecorder {
   capture(input: BrowserRecordingInput): Promise<BrowserCapture>;
@@ -19,14 +12,12 @@ export interface BrowserRecorder {
 
 export interface BrowserRecordingInput {
   readonly expectedUserMessage: string;
-  readonly sensitiveValues?: readonly string[];
   readonly targetUrl: string;
   readonly waitForCompletion: () => Promise<void>;
 }
 
 export interface RecordResearchSessionInput {
   readonly outputRoot: string;
-  readonly sensitiveValues?: readonly string[];
   readonly targetUrl: string;
   readonly userMessage: string;
   readonly waitForCompletion: () => Promise<void>;
@@ -52,17 +43,10 @@ export async function recordResearchSession(
   const runDirectory = join(input.outputRoot, runId);
   const capture = await dependencies.browser.capture({
     expectedUserMessage: input.userMessage,
-    sensitiveValues: input.sensitiveValues ?? [],
     targetUrl: input.targetUrl,
     waitForCompletion: input.waitForCompletion,
   });
-  const evidence = buildEvidence(
-    runId,
-    startedAt,
-    dependencies.now().toISOString(),
-    capture,
-    input.sensitiveValues ?? [],
-  );
+  const evidence = buildEvidence(runId, startedAt, dependencies.now().toISOString(), capture);
 
   await persistRun({ evidence, runDirectory, screenshots: capture.screenshots });
   return { runId, runDirectory };
@@ -73,21 +57,17 @@ function buildEvidence(
   startedAt: string,
   completedAt: string,
   capture: BrowserCapture,
-  sensitiveValues: readonly string[],
 ): CaseEvidence {
   return {
     runId,
     startedAt,
     completedAt,
-    conversation: capture.conversation.map((turn) => redactConversationTurn(turn, sensitiveValues)),
+    conversation: capture.conversation,
     screenshots: capture.screenshots.map(toScreenshotEvidence),
-    network: capture.network.map((entry) => redactNetworkEvidence(entry, sensitiveValues)),
+    network: capture.network,
     timings: { ...capture.timings },
-    page: {
-      url: redactUrl(capture.page.url, sensitiveValues),
-      title: redactText(capture.page.title, sensitiveValues),
-    },
-    errors: capture.errors.map((error) => redactRecordedError(error, sensitiveValues)),
+    page: capture.page,
+    errors: capture.errors,
   };
 }
 
