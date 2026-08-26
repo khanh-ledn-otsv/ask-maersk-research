@@ -12,10 +12,12 @@ const logger = pino({ level: process.env.LOG_LEVEL ?? "info" });
 const userDataDirectory =
   process.env.RESEARCH_BROWSER_PROFILE_DIR ?? join(process.cwd(), ".research", "browser-profile");
 const assistantSelector = process.env.ASK_MAERSK_ASSISTANT_SELECTOR;
+const loadingSelector = process.env.ASK_MAERSK_LOADING_SELECTOR;
 const browser = createPlaywrightBrowserRecorder({
   userDataDirectory,
   headless: process.env.RESEARCH_HEADLESS === "true",
   ...(typeof assistantSelector === "undefined" ? {} : { assistantSelector }),
+  ...(typeof loadingSelector === "undefined" ? {} : { loadingSelector }),
 });
 
 try {

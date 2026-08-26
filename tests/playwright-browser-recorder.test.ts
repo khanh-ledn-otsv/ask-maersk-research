@@ -11,6 +11,568 @@ const temporaryDirectories = createTemporaryDirectoryTracker();
 afterEach(() => temporaryDirectories.cleanup());
 
 describe("Playwright browser recorder", () => {
+  test("captures an ordered multi-turn journey with stages, screenshots, and interface offers", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<!doctype html>
+        <html>
+          <head><title>Multi-turn Ask Maersk fixture</title></head>
+          <body>
+            <form>
+              <input data-testid="question" />
+              <button data-testid="send" type="submit">Send</button>
+            </form>
+            <div class="loading" hidden>Loading</div>
+            <div id="answers"></div>
+            <script>
+              const messages = [];
+              const form = document.querySelector('form');
+              const input = document.querySelector('[data-testid=question]');
+              const loading = document.querySelector('.loading');
+              form.addEventListener('submit', (event) => {
+                event.preventDefault();
+                const question = input.value;
+                messages.push(question);
+                loading.hidden = false;
+                setTimeout(() => {
+                  const answer = document.createElement('section');
+                  answer.className = 'assistant';
+                  if (messages.length === 1) {
+                    answer.innerHTML = '<p>Which shipment do you mean?</p>' +
+                      '<a href="/tracking">Tracking guide</a>' +
+                      '<button type="button">Show identifier help</button>';
+                  } else if (messages.length === 2) {
+                    answer.innerHTML = '<p>I will use ABC123 for the shipment from your previous question.</p>';
+                  } else {
+                    answer.innerHTML = '<p>Switching from shipment tracking to vessel schedules.</p>';
+                  }
+                  document.querySelector('#answers').append(answer);
+                  if (messages.length === 1) {
+                    answer.insertAdjacentHTML(
+                      'afterend',
+                      '<button type="button" data-suggested-question>Use booking reference</button>',
+                    );
+                  }
+                  loading.hidden = true;
+                  input.value = '';
+                }, 50);
+              });
+            </script>
+          </body>
+        </html>`);
+    });
+    const port = await listen(server);
+    const userDataDirectory = await temporaryDirectories.create("maersk-multi-turn-profile-");
+
+    try {
+      const recorder = createPlaywrightBrowserRecorder({
+        assistantSelector: ".assistant",
+        headless: true,
+        loadingSelector: ".loading",
+        responseTimeoutMs: 1_000,
+        userDataDirectory,
+      });
+      const capture = await recorder.capture({
+        expectedUserMessages: [
+          "Track my shipment",
+          "Use booking reference ABC123",
+          "Switch to vessel schedules",
+        ],
+        interaction: {
+          inputSelector: "[data-testid=question]",
+          mode: "automated",
+          submitSelector: "[data-testid=send]",
+        },
+        targetUrl: `http://127.0.0.1:${port}/`,
+        waitForCompletion: async () => {
+          throw new Error("automated capture must not wait for researcher input");
+        },
+      });
+
+      expect(capture.conversation.map(({ role, text }) => ({ role, text }))).toEqual([
+        { role: "user", text: "Track my shipment" },
+        { role: "assistant", text: "Which shipment do you mean?" },
+        { role: "user", text: "Use booking reference ABC123" },
+        {
+          role: "assistant",
+          text: "I will use ABC123 for the shipment from your previous question.",
+        },
+        { role: "user", text: "Switch to vessel schedules" },
+        { role: "assistant", text: "Switching from shipment tracking to vessel schedules." },
+      ]);
+      expect(capture.conversation[1]?.interfaceOffers).toEqual([
+        { href: `http://127.0.0.1:${port}/tracking`, kind: "link", text: "Tracking guide" },
+        { kind: "button", text: "Show identifier help" },
+        { kind: "suggested-question", text: "Use booking reference" },
+      ]);
+      expect(capture.timings).toHaveLength(3);
+      expect(capture.timings).toEqual(
+        capture.timings.map((timing, turnIndex) =>
+          expect.objectContaining({
+            turnIndex,
+            submittedAt: expect.any(String),
+            firstLoadingIndicatorMs: expect.any(Number),
+            firstVisibleResponseMs: expect.any(Number),
+            completedResponseMs: expect.any(Number),
+          }),
+        ),
+      );
+      expect(capture.screenshots.map(({ filename, kind }) => ({ filename, kind }))).toEqual([
+        { filename: "01-start.png", kind: "start" },
+        { filename: "02-turn-01-result.png", kind: "result" },
+        { filename: "03-turn-02-result.png", kind: "result" },
+        { filename: "04-turn-03-result.png", kind: "result" },
+      ]);
+      expect(capture.errors).toEqual([]);
+    } finally {
+      await close(server);
+    }
+  });
+
+  test("preserves completed turn evidence when a follow-up times out", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<!doctype html>
+        <html>
+          <head><title>Partial journey fixture</title></head>
+          <body>
+            <form>
+              <input data-testid="question" />
+              <button type="submit">Send</button>
+            </form>
+            <div class="loading" hidden>Loading</div>
+            <div id="answers"></div>
+            <script>
+              let turn = 0;
+              const form = document.querySelector('form');
+              form.addEventListener('submit', (event) => {
+                event.preventDefault();
+                turn += 1;
+                document.querySelector('.loading').hidden = false;
+                if (turn !== 1) return;
+                setTimeout(() => {
+                  const answer = document.createElement('div');
+                  answer.className = 'assistant';
+                  answer.textContent = 'The first answer completed.';
+                  document.querySelector('#answers').append(answer);
+                  document.querySelector('.loading').hidden = true;
+                }, 25);
+              });
+            </script>
+          </body>
+        </html>`);
+    });
+    const port = await listen(server);
+    const userDataDirectory = await temporaryDirectories.create("maersk-partial-profile-");
+
+    try {
+      const recorder = createPlaywrightBrowserRecorder({
+        assistantSelector: ".assistant",
+        headless: true,
+        loadingSelector: ".loading",
+        responseTimeoutMs: 150,
+        userDataDirectory,
+      });
+      const capture = await recorder.capture({
+        expectedUserMessages: ["First question", "Follow-up that times out"],
+        interaction: { inputSelector: "[data-testid=question]", mode: "automated" },
+        targetUrl: `http://127.0.0.1:${port}/`,
+        waitForCompletion: async () => undefined,
+      });
+
+      expect(capture.conversation.map(({ role, text }) => ({ role, text }))).toEqual([
+        { role: "user", text: "First question" },
+        { role: "assistant", text: "The first answer completed." },
+        { role: "user", text: "Follow-up that times out" },
+      ]);
+      expect(capture.timings).toEqual([
+        expect.objectContaining({ turnIndex: 0, completedResponseMs: expect.any(Number) }),
+        expect.objectContaining({
+          turnIndex: 1,
+          firstLoadingIndicatorMs: expect.any(Number),
+          submittedAt: expect.any(String),
+        }),
+      ]);
+      expect(capture.timings[1]).not.toHaveProperty("completedResponseMs");
+      expect(capture.screenshots.map(({ filename, kind }) => ({ filename, kind }))).toEqual([
+        { filename: "01-start.png", kind: "start" },
+        { filename: "02-turn-01-result.png", kind: "result" },
+        { filename: "03-error.png", kind: "error" },
+      ]);
+      expect(capture.errors).toEqual([
+        expect.objectContaining({
+          message: expect.stringContaining("Turn 2 did not complete"),
+          source: "browser",
+        }),
+      ]);
+    } finally {
+      await close(server);
+    }
+  });
+
+  test("waits for a streaming answer to finish before submitting the follow-up", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<!doctype html>
+        <html>
+          <head><title>Streaming journey fixture</title></head>
+          <body>
+            <form><input data-testid="question" /></form>
+            <div class="loading" hidden>Loading</div>
+            <div id="answers"></div>
+            <script>
+              let firstAnswerComplete = false;
+              document.querySelector('form').addEventListener('submit', (event) => {
+                event.preventDefault();
+                const question = document.querySelector('[data-testid=question]').value;
+                const answer = document.createElement('div');
+                answer.className = 'assistant';
+                document.querySelector('#answers').append(answer);
+                if (question === 'First question') {
+                  document.querySelector('.loading').hidden = false;
+                  answer.textContent = 'Partial answer';
+                  setTimeout(() => {
+                    answer.textContent = 'Complete first answer';
+                    firstAnswerComplete = true;
+                    document.querySelector('.loading').hidden = true;
+                  }, 900);
+                  return;
+                }
+                answer.textContent = firstAnswerComplete
+                  ? 'Follow-up received after completion'
+                  : 'Follow-up was submitted too early';
+              });
+            </script>
+          </body>
+        </html>`);
+    });
+    const port = await listen(server);
+    const userDataDirectory = await temporaryDirectories.create("maersk-stream-profile-");
+
+    try {
+      const recorder = createPlaywrightBrowserRecorder({
+        assistantSelector: ".assistant",
+        headless: true,
+        loadingSelector: ".loading",
+        responseTimeoutMs: 2_000,
+        userDataDirectory,
+      });
+      const capture = await recorder.capture({
+        expectedUserMessages: ["First question", "Follow-up question"],
+        interaction: { inputSelector: "[data-testid=question]", mode: "automated" },
+        targetUrl: `http://127.0.0.1:${port}/`,
+        waitForCompletion: async () => undefined,
+      });
+
+      expect(capture.conversation.map(({ text }) => text)).toEqual([
+        "First question",
+        "Complete first answer",
+        "Follow-up question",
+        "Follow-up received after completion",
+      ]);
+    } finally {
+      await close(server);
+    }
+  });
+
+  test("does not submit a follow-up when response completion is unobservable", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<!doctype html>
+        <html>
+          <head><title>No completion signal fixture</title></head>
+          <body>
+            <form><input data-testid="question" /></form>
+            <div hidden><div class="loading">Hidden by an ancestor</div></div>
+            <div id="answers"></div>
+            <script>
+              document.querySelector('form').addEventListener('submit', (event) => {
+                event.preventDefault();
+                const answer = document.createElement('div');
+                answer.className = 'assistant';
+                answer.textContent = 'Visible response with no completion signal';
+                document.querySelector('#answers').append(answer);
+              });
+            </script>
+          </body>
+        </html>`);
+    });
+    const port = await listen(server);
+    const userDataDirectory = await temporaryDirectories.create("maersk-no-completion-profile-");
+
+    try {
+      const recorder = createPlaywrightBrowserRecorder({
+        assistantSelector: ".assistant",
+        headless: true,
+        loadingSelector: ".loading",
+        responseTimeoutMs: 150,
+        userDataDirectory,
+      });
+      const capture = await recorder.capture({
+        expectedUserMessages: ["First question", "Unsafe follow-up"],
+        interaction: { inputSelector: "[data-testid=question]", mode: "automated" },
+        targetUrl: `http://127.0.0.1:${port}/`,
+        waitForCompletion: async () => undefined,
+      });
+
+      expect(capture.conversation.map(({ role, text }) => ({ role, text }))).toEqual([
+        { role: "user", text: "First question" },
+        { role: "assistant", text: "Visible response with no completion signal" },
+      ]);
+      expect(capture.timings).toEqual([
+        expect.objectContaining({
+          turnIndex: 0,
+          firstVisibleResponseMs: expect.any(Number),
+        }),
+      ]);
+      expect(capture.timings[0]).not.toHaveProperty("completedResponseMs");
+      expect(capture.errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: expect.stringContaining("No observable response completion signal appeared"),
+          }),
+        ]),
+      );
+    } finally {
+      await close(server);
+    }
+  });
+
+  test("captures each completed turn while a researcher controls a manual journey", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<!doctype html>
+        <html>
+          <head>
+            <title>Manual multi-turn fixture</title>
+            <style>body { margin: 0; min-height: 100vh; background: white; }</style>
+          </head>
+          <body>
+            <form><textarea>Manual first question</textarea></form>
+            <div class="loading" hidden>Loading</div>
+            <div id="answers"></div>
+            <script>
+              let turn = 0;
+              const form = document.querySelector('form');
+              const input = document.querySelector('textarea');
+              form.addEventListener('submit', (event) => {
+                event.preventDefault();
+                turn += 1;
+                document.querySelector('.loading').hidden = false;
+                setTimeout(() => {
+                  const answer = document.createElement('div');
+                  answer.className = 'assistant';
+                  answer.textContent = turn === 1 ? 'Manual first answer' : 'Manual follow-up answer';
+                  document.querySelector('#answers').append(answer);
+                  document.body.style.background = turn === 1 ? 'rgb(255, 0, 0)' : 'rgb(0, 0, 255)';
+                  setTimeout(() => { document.querySelector('.loading').hidden = true; }, 60);
+                  if (turn === 1) {
+                    setTimeout(() => {
+                      input.value = 'Manual follow-up question';
+                      form.requestSubmit();
+                    }, 200);
+                  }
+                }, 80);
+              });
+              setTimeout(() => form.requestSubmit(), 0);
+            </script>
+          </body>
+        </html>`);
+    });
+    const port = await listen(server);
+    const userDataDirectory = await temporaryDirectories.create("maersk-manual-journey-profile-");
+
+    try {
+      const recorder = createPlaywrightBrowserRecorder({
+        assistantSelector: ".assistant",
+        headless: true,
+        loadingSelector: ".loading",
+        userDataDirectory,
+      });
+      const capture = await recorder.capture({
+        expectedUserMessages: ["Manual first question", "Manual follow-up question"],
+        interaction: { mode: "manual" },
+        targetUrl: `http://127.0.0.1:${port}/`,
+        waitForCompletion: () => new Promise((resolve) => setTimeout(resolve, 650)),
+      });
+
+      expect(capture.conversation.map(({ role, text }) => ({ role, text }))).toEqual([
+        { role: "user", text: "Manual first question" },
+        { role: "assistant", text: "Manual first answer" },
+        { role: "user", text: "Manual follow-up question" },
+        { role: "assistant", text: "Manual follow-up answer" },
+      ]);
+      expect(capture.timings).toEqual([
+        expect.objectContaining({
+          turnIndex: 0,
+          firstLoadingIndicatorMs: expect.any(Number),
+          firstVisibleResponseMs: expect.any(Number),
+          completedResponseMs: expect.any(Number),
+        }),
+        expect.objectContaining({
+          turnIndex: 1,
+          firstLoadingIndicatorMs: expect.any(Number),
+          firstVisibleResponseMs: expect.any(Number),
+          completedResponseMs: expect.any(Number),
+        }),
+      ]);
+      for (const timing of capture.timings) {
+        expect(timing.completedResponseMs).toBeGreaterThan(
+          timing.firstVisibleResponseMs ?? Number.POSITIVE_INFINITY,
+        );
+      }
+      expect(capture.screenshots.map(({ filename }) => filename)).toEqual([
+        "01-start.png",
+        "02-turn-01-result.png",
+        "03-turn-02-result.png",
+      ]);
+      expect(await readPngPixel(capture.screenshots[1]?.data, 1_200, 800)).toEqual([
+        255, 0, 0, 255,
+      ]);
+      expect(await readPngPixel(capture.screenshots[2]?.data, 1_200, 800)).toEqual([
+        0, 0, 255, 255,
+      ]);
+    } finally {
+      await close(server);
+    }
+  });
+
+  test("keeps observing a manual streaming answer until the researcher finishes", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<!doctype html>
+        <html>
+          <head><title>Manual streaming fixture</title></head>
+          <body>
+            <form><textarea>Manual streaming question</textarea></form>
+            <div class="assistant"></div>
+            <script>
+              const form = document.querySelector('form');
+              form.addEventListener('submit', (event) => {
+                event.preventDefault();
+                const answer = document.querySelector('.assistant');
+                answer.textContent = 'Partial manual answer';
+                setTimeout(() => { answer.textContent = 'Complete manual answer'; }, 900);
+                setTimeout(() => {
+                  answer.insertAdjacentHTML(
+                    'afterend',
+                    '<button data-suggested-question>Ask another question</button>',
+                  );
+                }, 1_000);
+              });
+              setTimeout(() => form.requestSubmit(), 0);
+            </script>
+          </body>
+        </html>`);
+    });
+    const port = await listen(server);
+    const userDataDirectory = await temporaryDirectories.create("maersk-manual-stream-profile-");
+
+    try {
+      const recorder = createPlaywrightBrowserRecorder({
+        assistantSelector: ".assistant",
+        headless: true,
+        loadingSelector: ".loading-that-never-appears",
+        userDataDirectory,
+      });
+      const capture = await recorder.capture({
+        expectedUserMessages: ["Manual streaming question"],
+        interaction: { mode: "manual" },
+        targetUrl: `http://127.0.0.1:${port}/`,
+        waitForCompletion: () => new Promise((resolve) => setTimeout(resolve, 1_200)),
+      });
+
+      expect(capture.conversation.map(({ text }) => text)).toEqual([
+        "Manual streaming question",
+        "Complete manual answer",
+      ]);
+      expect(capture.conversation[1]?.interfaceOffers).toEqual([
+        { kind: "suggested-question", text: "Ask another question" },
+      ]);
+      expect(capture.screenshots.map(({ filename }) => filename)).toEqual([
+        "01-start.png",
+        "02-result.png",
+      ]);
+    } finally {
+      await close(server);
+    }
+  });
+
+  test("preserves a completed manual turn without duplicating it for an unanswered follow-up", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<!doctype html>
+        <html>
+          <head><title>Manual partial failure fixture</title></head>
+          <body>
+            <form><textarea>Manual first question</textarea></form>
+            <div class="loading" hidden>Loading</div>
+            <div id="answers"></div>
+            <script>
+              let turn = 0;
+              const form = document.querySelector('form');
+              const input = document.querySelector('textarea');
+              form.addEventListener('submit', (event) => {
+                event.preventDefault();
+                turn += 1;
+                document.querySelector('.loading').hidden = false;
+                if (turn !== 1) return;
+                setTimeout(() => {
+                  const answer = document.createElement('div');
+                  answer.className = 'assistant';
+                  answer.textContent = 'Only the first answer completed';
+                  document.querySelector('#answers').append(answer);
+                  document.querySelector('.loading').hidden = true;
+                  setTimeout(() => {
+                    input.value = 'Unanswered manual follow-up';
+                    form.requestSubmit();
+                  }, 150);
+                }, 60);
+              });
+              setTimeout(() => form.requestSubmit(), 0);
+            </script>
+          </body>
+        </html>`);
+    });
+    const port = await listen(server);
+    const userDataDirectory = await temporaryDirectories.create("maersk-manual-partial-profile-");
+
+    try {
+      const recorder = createPlaywrightBrowserRecorder({
+        assistantSelector: ".assistant",
+        headless: true,
+        loadingSelector: ".loading",
+        userDataDirectory,
+      });
+      const capture = await recorder.capture({
+        expectedUserMessages: ["Manual first question", "Unanswered manual follow-up"],
+        interaction: { mode: "manual" },
+        targetUrl: `http://127.0.0.1:${port}/`,
+        waitForCompletion: () => new Promise((resolve) => setTimeout(resolve, 500)),
+      });
+
+      expect(capture.conversation.map(({ role, text }) => ({ role, text }))).toEqual([
+        { role: "user", text: "Manual first question" },
+        { role: "assistant", text: "Only the first answer completed" },
+        { role: "user", text: "Unanswered manual follow-up" },
+      ]);
+      expect(capture.timings[1]).not.toHaveProperty("completedResponseMs");
+      expect(capture.screenshots.map(({ filename, kind }) => ({ filename, kind }))).toEqual([
+        { filename: "01-start.png", kind: "start" },
+        { filename: "02-turn-01-result.png", kind: "result" },
+        { filename: "03-error.png", kind: "error" },
+      ]);
+      expect(capture.errors).toEqual([
+        expect.objectContaining({
+          message: "No assistant response was observed for manual turn 2",
+          source: "browser",
+        }),
+      ]);
+    } finally {
+      await close(server);
+    }
+  });
+
   test("submits an automated case and waits for the declared answer", async () => {
     const server = createServer((request, response) => {
       if (request.url === "/answer") {
@@ -50,7 +612,7 @@ describe("Playwright browser recorder", () => {
       });
       const capture = await recorder.capture({
         captureTrace: true,
-        expectedUserMessage: "What can you help me with?",
+        expectedUserMessages: ["What can you help me with?"],
         interaction: {
           inputSelector: "[data-testid=question]",
           mode: "automated",
@@ -118,7 +680,7 @@ describe("Playwright browser recorder", () => {
       });
 
       const capture = await recorder.capture({
-        expectedUserMessage: "What can you help me with",
+        expectedUserMessages: ["What can you help me with"],
         targetUrl: `http://127.0.0.1:${port}/`,
         waitForCompletion: async () => {
           await sidebarApiObserved.promise;
@@ -172,7 +734,7 @@ describe("Playwright browser recorder", () => {
       });
 
       const capture = await recorder.capture({
-        expectedUserMessage: "What can you help me with",
+        expectedUserMessages: ["What can you help me with"],
         targetUrl: `http://127.0.0.1:${port}/`,
         waitForCompletion: async () => undefined,
       });
@@ -290,7 +852,7 @@ describe("Playwright browser recorder", () => {
 
       const capture = await Promise.race([
         recorder.capture({
-          expectedUserMessage: "Inspect functional traffic",
+          expectedUserMessages: ["Inspect functional traffic"],
           targetUrl: `http://127.0.0.1:${port}/`,
           waitForCompletion: async () => {
             await Promise.all([
@@ -409,7 +971,7 @@ describe("Playwright browser recorder", () => {
         userDataDirectory,
       });
       const capture = await recorder.capture({
-        expectedUserMessage: "Track shipment",
+        expectedUserMessages: ["Track shipment"],
         targetUrl: `http://127.0.0.1:${port}/`,
         waitForCompletion: async () => {
           await clientFrameObserved.promise;
@@ -485,7 +1047,7 @@ describe("Playwright browser recorder", () => {
         userDataDirectory,
       });
       const capturePromise = recorder.capture({
-        expectedUserMessage: "Track shipment",
+        expectedUserMessages: ["Track shipment"],
         targetUrl: `http://127.0.0.1:${port}/`,
         waitForCompletion: () => new Promise((resolve) => setTimeout(resolve, 250)),
       });
@@ -575,7 +1137,7 @@ describe("Playwright browser recorder", () => {
       });
 
       const capture = await recorder.capture({
-        expectedUserMessage: "Track my shipment",
+        expectedUserMessages: ["Track my shipment"],
         targetUrl: `http://127.0.0.1:${port}/`,
         waitForCompletion: async () =>
           Promise.all([
@@ -603,7 +1165,7 @@ describe("Playwright browser recorder", () => {
         }),
       ]);
       expect(Date.parse(capture.conversation[0]?.timestamp ?? "")).not.toBeNaN();
-      expect(capture.timings.submittedAt).toBe(capture.conversation[0]?.timestamp);
+      expect(capture.timings[0]?.submittedAt).toBe(capture.conversation[0]?.timestamp);
       expect(capture.screenshots.map(({ filename }) => filename)).toEqual([
         "01-start.png",
         "02-result.png",

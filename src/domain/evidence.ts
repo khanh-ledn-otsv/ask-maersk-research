@@ -4,6 +4,13 @@ export interface ConversationTurn {
   readonly text: string;
   readonly timestamp: string;
   readonly screenshot?: string;
+  readonly interfaceOffers?: readonly InterfaceOfferEvidence[];
+}
+
+export interface InterfaceOfferEvidence {
+  readonly kind: "button" | "link" | "suggested-question";
+  readonly text: string;
+  readonly href?: string;
 }
 
 export interface ScreenshotCapture {
@@ -51,6 +58,7 @@ export interface NetworkFrameEvidence {
 }
 
 export interface TimingEvidence {
+  readonly turnIndex: number;
   readonly submittedAt: string;
   readonly firstLoadingIndicatorMs?: number;
   readonly firstVisibleResponseMs?: number;
@@ -71,7 +79,7 @@ export interface BrowserCapture {
   readonly conversation: readonly ConversationTurn[];
   readonly screenshots: readonly ScreenshotCapture[];
   readonly network: readonly NetworkEvidence[];
-  readonly timings: TimingEvidence;
+  readonly timings: readonly TimingEvidence[];
   readonly errors: readonly RecordedError[];
   readonly trace?: TraceCapture;
 }
@@ -84,7 +92,7 @@ export interface CaseEvidence {
   readonly conversation: readonly ConversationTurn[];
   readonly screenshots: readonly ScreenshotEvidence[];
   readonly network: readonly NetworkEvidence[];
-  readonly timings: TimingEvidence;
+  readonly timings: readonly TimingEvidence[];
   readonly page: {
     readonly url: string;
     readonly title: string;

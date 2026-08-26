@@ -39,7 +39,7 @@ describe("research CLI", () => {
             { filename: "02-result.png", kind: "result", data: Buffer.from("result") },
           ],
           network: [],
-          timings: { submittedAt: "2026-08-25T16:00:00.000Z" },
+          timings: [{ turnIndex: 0, submittedAt: "2026-08-25T16:00:00.000Z" }],
           errors: [],
         };
       },
@@ -105,7 +105,7 @@ describe("research CLI", () => {
     });
     let researcherReleasedRecording = false;
     const browser = createBrowser(async (input) => {
-      expect(input.expectedUserMessage).toBe("Track my shipment");
+      expect(input.expectedUserMessages).toEqual(["Track my shipment"]);
       expect(input.captureTrace).toBe(true);
       expect(input.interaction).toEqual({ mode: "manual" });
       await input.waitForCompletion();
@@ -145,9 +145,16 @@ describe("research CLI", () => {
       category: "CAPABILITY",
       objective: "Observe the opening capability answer",
       executionMode: "automated",
-      messages: [{ text: "What can you help me with?" }],
+      messages: [
+        { text: "What can you help me with?" },
+        { text: "Now help me track a shipment" },
+      ],
     });
     const browser = createBrowser(async (input) => {
+      expect(input.expectedUserMessages).toEqual([
+        "What can you help me with?",
+        "Now help me track a shipment",
+      ]);
       expect(input.interaction).toEqual({
         inputSelector: "[data-testid=question]",
         mode: "automated",
@@ -237,7 +244,7 @@ describe("research CLI", () => {
 
     expect(exitCode).toBe(1);
     expect(errors[0]).toMatch(
-      /Invalid research case TRACK-001\.json: messages: must contain exactly one message/u,
+      /Invalid research case TRACK-001\.json: messages: must contain at least one message/u,
     );
   });
 
@@ -289,7 +296,7 @@ function createBrowser(beforeCapture: (input: CaptureInput) => Promise<void>): B
           {
             index: 0,
             role: "user",
-            text: input.expectedUserMessage,
+            text: input.expectedUserMessages[0] ?? "",
             timestamp: "2026-08-25T16:00:00.000Z",
           },
           {
@@ -301,7 +308,7 @@ function createBrowser(beforeCapture: (input: CaptureInput) => Promise<void>): B
         ],
         screenshots: [],
         network: [],
-        timings: { submittedAt: "2026-08-25T16:00:00.000Z" },
+        timings: [{ turnIndex: 0, submittedAt: "2026-08-25T16:00:00.000Z" }],
         errors: [],
         ...(input.captureTrace === true
           ? { trace: { filename: "trace.zip", data: Buffer.from("trace") } }

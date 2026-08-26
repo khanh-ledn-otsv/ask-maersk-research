@@ -13,9 +13,12 @@ import {
 import type {
   BrowserCapture,
   ConversationTurn,
+  InterfaceOfferEvidence,
   NetworkEvidence,
   NetworkFrameEvidence,
   RecordedError,
+  ScreenshotCapture,
+  TimingEvidence,
   TraceCapture,
 } from "../domain/evidence.ts";
 import type {
@@ -38,11 +41,15 @@ const TELEMETRY_DOMAINS = [
 const TELEMETRY_PATH = /\/telemetry(?:\/|$)/iu;
 const EVENT_SOURCE_BINDING = "__askMaerskResearchRecordEventSourceMessage";
 const SUBMISSION_BINDING = "__askMaerskResearchRecordSubmission";
+const DEFAULT_LOADING_SELECTOR =
+  '[aria-busy="true"], [role="progressbar"], [data-testid*="loading" i], [class*="loading" i]';
 
 export interface PlaywrightBrowserRecorderOptions {
   readonly assistantSelector?: string;
   readonly headless?: boolean;
+  readonly loadingSelector?: string;
   readonly now?: () => Date;
+  readonly responseTimeoutMs?: number;
   readonly resultSelector?: string;
   readonly userDataDirectory: string;
 }
@@ -75,6 +82,33 @@ interface NetworkCaptureResult {
   readonly network: readonly NetworkEvidence[];
 }
 
+interface AssistantObservation {
+  readonly interfaceOffers: readonly InterfaceOfferEvidence[];
+  readonly text: string;
+}
+
+interface JourneyCapture {
+  readonly conversation: readonly ConversationTurn[];
+  readonly errors: readonly RecordedError[];
+  readonly screenshots: readonly ScreenshotCapture[];
+  readonly timings: readonly TimingEvidence[];
+}
+
+interface LoadingIndicatorObservation {
+  readonly finished: Promise<void>;
+  readonly observedAt: () => Date | undefined;
+}
+
+interface LiveManualTurn {
+  firstVisibleAt?: Date;
+  loadingAt?: Date;
+  observation?: AssistantObservation;
+  readonly previousAssistantCount: number;
+  readonly previousAssistantObservation?: AssistantObservation;
+  readonly submission: UserSubmission;
+  readonly turnIndex: number;
+}
+
 interface EventSourceObservation {
   readonly connectionId: string;
   readonly data: string;
@@ -102,7 +136,9 @@ export function createPlaywrightBrowserRecorder(
       return captureWithPlaywright(input, {
         assistantSelector,
         headless: options.headless ?? false,
+        loadingSelector: options.loadingSelector ?? DEFAULT_LOADING_SELECTOR,
         now,
+        responseTimeoutMs: options.responseTimeoutMs ?? 30_000,
         resultSelector,
         userDataDirectory: options.userDataDirectory,
       });
@@ -113,7 +149,9 @@ export function createPlaywrightBrowserRecorder(
 interface ResolvedOptions {
   readonly assistantSelector: string;
   readonly headless: boolean;
+  readonly loadingSelector: string;
   readonly now: () => Date;
+  readonly responseTimeoutMs: number;
   readonly resultSelector: string;
   readonly userDataDirectory: string;
 }
@@ -144,30 +182,44 @@ async function captureWithPlaywright(
     const recordingStartedAt = options.now();
     const startScreenshot = await takeScreenshot(page);
 
-    await executeInteraction(page, input, options.assistantSelector);
+    const liveJourney = await executeInteraction(
+      page,
+      input,
+      options,
+      interaction.submissions,
+    );
 
     const completedAt = options.now();
     const resultPage = await findResultPage(context.pages(), page, options.resultSelector);
     await resultPage.bringToFront();
+    const needsManualSnapshot =
+      typeof liveJourney === "undefined" ||
+      (input.interaction?.mode !== "automated" && liveJourney.screenshots.length === 0);
+    const journey = needsManualSnapshot
+      ? await captureManualJourney(
+          resultPage,
+          interaction.submissions(),
+          completedAt,
+          recordingStartedAt,
+          options.assistantSelector,
+        )
+      : liveJourney;
     const exceptionalStates = await inspectExceptionalStates(
       resultPage,
       options.assistantSelector,
       completedAt,
     );
-    const assistantText = await readAssistantText(resultPage, options.assistantSelector);
-    const resultScreenshot = await takeScreenshot(resultPage);
     const network = await networkCapture.finish();
-    const conversation = buildConversation(
-      interaction.submissions(),
-      assistantText,
-      completedAt.toISOString(),
-    );
-    const submittedAt = conversation.find((turn) => turn.role === "user")?.timestamp;
     const lateErrors = [
       ...network.errors,
       ...interaction.errors(),
+      ...journey.errors,
       ...exceptionalStates,
-      ...validateExpectedMessage(input.expectedUserMessage, conversation, completedAt),
+      ...validateExpectedMessages(
+        input.expectedUserMessages,
+        interaction.submissions(),
+        completedAt,
+      ),
     ];
     const errors = [
       ...pageErrors.errors(),
@@ -175,9 +227,13 @@ async function captureWithPlaywright(
     ].toSorted((left, right) => left.timestamp.localeCompare(right.timestamp));
     const eventScreenshots = await pageErrors.screenshots();
     const lateScreenshots = await captureRepeatedScreenshots(resultPage, lateErrors.length);
+    const baseScreenshots: readonly ScreenshotCapture[] = [
+      { filename: "01-start.png", kind: "start", data: startScreenshot },
+      ...journey.screenshots,
+    ];
     const diagnosticScreenshots = [...eventScreenshots, ...lateScreenshots].map(
       (data, index) => ({
-        filename: `${String(index + 3).padStart(2, "0")}-error.png`,
+        filename: `${String(index + baseScreenshots.length + 1).padStart(2, "0")}-error.png`,
         kind: "error" as const,
         data,
       }),
@@ -187,20 +243,10 @@ async function captureWithPlaywright(
 
     return {
       page: { url: resultPage.url(), title: await resultPage.title() },
-      conversation,
-      screenshots: [
-        { filename: "01-start.png", kind: "start", data: startScreenshot },
-        { filename: "02-result.png", kind: "result", data: resultScreenshot },
-        ...diagnosticScreenshots,
-      ],
+      conversation: journey.conversation,
+      screenshots: [...baseScreenshots, ...diagnosticScreenshots],
       network: network.network,
-      timings: {
-        submittedAt: submittedAt ?? recordingStartedAt.toISOString(),
-        completedResponseMs: Math.max(
-          0,
-          completedAt.getTime() - Date.parse(submittedAt ?? recordingStartedAt.toISOString()),
-        ),
-      },
+      timings: journey.timings,
       errors,
       ...(typeof trace === "undefined" ? {} : { trace }),
     };
@@ -224,32 +270,461 @@ async function finishTrace(context: BrowserContext): Promise<TraceCapture> {
 async function executeInteraction(
   page: Page,
   input: BrowserRecordingInput,
-  assistantSelector: string,
-): Promise<void> {
+  options: ResolvedOptions,
+  submissions: () => readonly UserSubmission[],
+): Promise<JourneyCapture | undefined> {
   if (input.interaction?.mode !== "automated") {
-    await input.waitForCompletion();
-    return;
+    const journey = await captureLiveManualJourney(
+      page,
+      input.waitForCompletion,
+      submissions,
+      input.expectedUserMessages.length,
+      options,
+    );
+    return journey.conversation.length === 0 ? undefined : journey;
   }
 
-  const previousAssistantText = await readAssistantText(page, assistantSelector);
   const question = page.locator(input.interaction.inputSelector);
   await question.waitFor({ state: "visible" });
-  await question.fill(input.expectedUserMessage);
-  if (typeof input.interaction.submitSelector === "undefined") {
-    await question.press("Enter");
-  } else {
-    await page.locator(input.interaction.submitSelector).click();
+  const conversation: ConversationTurn[] = [];
+  const errors: RecordedError[] = [];
+  const screenshots: ScreenshotCapture[] = [];
+  const timings: TimingEvidence[] = [];
+
+  for (const [turnIndex, message] of input.expectedUserMessages.entries()) {
+    const assistants = page.locator(options.assistantSelector);
+    const previousCount = await assistants.count();
+    const previousText = previousCount === 0 ? "" : await readAssistantText(page, options.assistantSelector);
+    await question.fill(message);
+    const submittedAt = options.now();
+    const loadingObservation = startLoadingIndicatorObservation(
+      page,
+      options.loadingSelector,
+      options.now,
+      options.responseTimeoutMs,
+    );
+    if (typeof input.interaction.submitSelector === "undefined") {
+      await question.press("Enter");
+    } else {
+      await page.locator(input.interaction.submitSelector).click();
+    }
+    appendUserTurn(conversation, message, submittedAt.toISOString());
+
+    const timing: TimingEvidence = {
+      turnIndex,
+      submittedAt: submittedAt.toISOString(),
+    };
+    let firstVisibleAt: Date | undefined;
+    try {
+      await page.waitForFunction(
+        ({ previousCount: countBefore, previousText: textBefore, selector }) => {
+          const elements = Array.from(document.querySelectorAll(selector));
+          const latest = elements.at(-1);
+          const text = latest?.textContent?.trim() ?? "";
+          return text.length > 0 && (elements.length > countBefore || text !== textBefore);
+        },
+        { previousCount, previousText, selector: options.assistantSelector },
+        { timeout: options.responseTimeoutMs },
+      );
+      firstVisibleAt = options.now();
+      const assistant = page.locator(options.assistantSelector).last();
+      await Promise.race([loadingObservation.finished, page.waitForTimeout(50)]);
+      if (
+        input.expectedUserMessages.length > 1 &&
+        typeof loadingObservation.observedAt() === "undefined"
+      ) {
+        await loadingObservation.finished;
+      }
+      if (
+        typeof loadingObservation.observedAt() !== "undefined" ||
+        (await hasVisibleMatch(page.locator(options.loadingSelector)))
+      ) {
+        await waitForNoVisibleMatch(
+          page,
+          options.loadingSelector,
+          options.responseTimeoutMs,
+        );
+      } else if (input.expectedUserMessages.length > 1) {
+        throw new Error("No observable response completion signal appeared");
+      }
+      await waitForStableText(assistant);
+      const completedAt = options.now();
+      await Promise.race([loadingObservation.finished, page.waitForTimeout(0)]);
+      const loadingAt = loadingObservation.observedAt();
+      const observation = await readAssistantObservation(assistant);
+      await appendCompletedAssistantTurn({
+        completedAt,
+        conversation,
+        observation,
+        page,
+        screenshots,
+        turnCount: input.expectedUserMessages.length,
+        turnIndex,
+      });
+      timings.push({
+        ...timing,
+        ...(typeof loadingAt === "undefined"
+          ? {}
+          : { firstLoadingIndicatorMs: elapsedMs(submittedAt, loadingAt) }),
+        firstVisibleResponseMs: elapsedMs(submittedAt, firstVisibleAt),
+        completedResponseMs: elapsedMs(submittedAt, completedAt),
+      });
+    } catch (error: unknown) {
+      await Promise.race([loadingObservation.finished, page.waitForTimeout(0)]);
+      const loadingAt = loadingObservation.observedAt();
+      timings.push({
+        ...timing,
+        ...(typeof loadingAt === "undefined"
+          ? {}
+          : { firstLoadingIndicatorMs: elapsedMs(submittedAt, loadingAt) }),
+        ...(typeof firstVisibleAt === "undefined"
+          ? {}
+          : { firstVisibleResponseMs: elapsedMs(submittedAt, firstVisibleAt) }),
+      });
+      if (typeof firstVisibleAt !== "undefined") {
+        const assistant = page.locator(options.assistantSelector).last();
+        if ((await assistant.count()) > 0) {
+          const observation = await readAssistantObservation(assistant);
+          conversation.push({
+            index: conversation.length,
+            role: "assistant",
+            text: observation.text,
+            timestamp: firstVisibleAt.toISOString(),
+            ...(observation.interfaceOffers.length === 0
+              ? {}
+              : { interfaceOffers: observation.interfaceOffers }),
+          });
+        }
+      }
+      const detail = error instanceof Error ? error.message : String(error);
+      errors.push({
+        timestamp: options.now().toISOString(),
+        message: `Turn ${turnIndex + 1} did not complete: ${detail}`,
+        source: "browser",
+      });
+      break;
+    }
   }
 
-  await page.waitForFunction(
-    ({ previousText, selector }) => {
-      const elements = Array.from(document.querySelectorAll(selector));
-      const latest = elements.at(-1);
-      return latest?.textContent?.trim() !== "" && latest?.textContent?.trim() !== previousText;
+  return { conversation, errors, screenshots, timings };
+}
+
+async function captureManualJourney(
+  page: Page,
+  submissions: readonly UserSubmission[],
+  completedAt: Date,
+  recordingStartedAt: Date,
+  assistantSelector: string,
+): Promise<JourneyCapture> {
+  const observations = await readAssistantObservations(page, assistantSelector);
+  const conversation: ConversationTurn[] = [];
+  const screenshots: ScreenshotCapture[] = [];
+  const turnCount = Math.max(submissions.length, observations.length, 1);
+
+  for (let turnIndex = 0; turnIndex < turnCount; turnIndex += 1) {
+    const submission = submissions[turnIndex];
+    if (typeof submission !== "undefined") {
+      appendUserTurn(conversation, submission.text, submission.timestamp);
+    }
+    const observation = observations[turnIndex];
+    if (typeof observation === "undefined") continue;
+    await appendCompletedAssistantTurn({
+      completedAt,
+      conversation,
+      observation,
+      page,
+      screenshots,
+      turnCount: observations.length,
+      turnIndex,
+    });
+  }
+
+  const timings = submissions.map((submission, turnIndex): TimingEvidence => ({
+    turnIndex,
+    submittedAt: submission.timestamp,
+    ...(turnIndex === submissions.length - 1 && observations.length > turnIndex
+      ? { completedResponseMs: elapsedMs(new Date(submission.timestamp), completedAt) }
+      : {}),
+  }));
+  if (timings.length === 0) {
+    timings.push({
+      turnIndex: 0,
+      submittedAt: recordingStartedAt.toISOString(),
+      ...(observations.length === 0
+        ? {}
+        : { completedResponseMs: elapsedMs(recordingStartedAt, completedAt) }),
+    });
+  }
+  return { conversation, errors: [], screenshots, timings };
+}
+
+async function captureLiveManualJourney(
+  page: Page,
+  waitForCompletion: () => Promise<void>,
+  readSubmissions: () => readonly UserSubmission[],
+  turnCount: number,
+  options: ResolvedOptions,
+): Promise<JourneyCapture> {
+  const conversation: ConversationTurn[] = [];
+  const errors: RecordedError[] = [];
+  const screenshots: ScreenshotCapture[] = [];
+  const timings: TimingEvidence[] = [];
+  let active: LiveManualTurn | undefined;
+  let processedSubmissions = 0;
+  let released = false;
+  let releaseError: unknown;
+  const release = waitForCompletion().then(
+    () => {
+      released = true;
     },
-    { previousText: previousAssistantText, selector: assistantSelector },
+    (error: unknown) => {
+      releaseError = error;
+      released = true;
+    },
   );
-  await waitForStableText(page.locator(assistantSelector).last());
+
+  const finalize = async (force: boolean): Promise<void> => {
+    if (typeof active === "undefined") return;
+    const assistants = page.locator(options.assistantSelector);
+    const assistantCount = await assistants.count();
+    if (typeof active.observation === "undefined" && assistantCount > 0 && force) {
+      const observation = await readAssistantObservation(assistants.last());
+      if (assistantObservationChanged(active, assistantCount, observation)) {
+        active.observation = observation;
+      }
+    }
+    const completedAt = options.now();
+    const timing: TimingEvidence = {
+      turnIndex: active.turnIndex,
+      submittedAt: active.submission.timestamp,
+      ...(typeof active.loadingAt === "undefined"
+        ? {}
+        : {
+            firstLoadingIndicatorMs: elapsedMs(
+              new Date(active.submission.timestamp),
+              active.loadingAt,
+            ),
+          }),
+      ...(typeof active.firstVisibleAt === "undefined"
+        ? {}
+        : {
+            firstVisibleResponseMs: elapsedMs(
+              new Date(active.submission.timestamp),
+              active.firstVisibleAt,
+            ),
+          }),
+      ...(typeof active.observation === "undefined"
+        ? {}
+        : {
+            completedResponseMs: elapsedMs(
+              new Date(active.submission.timestamp),
+              completedAt,
+            ),
+          }),
+    };
+    timings.push(timing);
+    if (typeof active.observation !== "undefined") {
+      await appendCompletedAssistantTurn({
+        completedAt,
+        conversation,
+        observation: active.observation,
+        page,
+        screenshots,
+        turnCount,
+        turnIndex: active.turnIndex,
+      });
+    } else if (force) {
+      errors.push({
+        timestamp: completedAt.toISOString(),
+        message: `No assistant response was observed for manual turn ${active.turnIndex + 1}`,
+        source: "browser",
+      });
+    }
+    active = undefined;
+  };
+
+  while (true) {
+    const submissions = readSubmissions();
+    while (processedSubmissions < submissions.length) {
+      await finalize(true);
+      const submission = submissions[processedSubmissions];
+      if (typeof submission === "undefined") break;
+      const assistants = page.locator(options.assistantSelector);
+      const previousAssistantCount = await assistants.count();
+      const previousAssistantObservation =
+        previousAssistantCount === 0
+          ? undefined
+          : await readAssistantObservation(assistants.last());
+      appendUserTurn(conversation, submission.text, submission.timestamp);
+      active = {
+        previousAssistantCount,
+        ...(typeof previousAssistantObservation === "undefined"
+          ? {}
+          : { previousAssistantObservation }),
+        submission,
+        turnIndex: processedSubmissions,
+      };
+      processedSubmissions += 1;
+    }
+
+    if (typeof active !== "undefined") {
+      const observedAt = options.now();
+      const loadingVisible = await hasVisibleMatch(page.locator(options.loadingSelector));
+      if (loadingVisible) active.loadingAt ??= observedAt;
+      const assistants = page.locator(options.assistantSelector);
+      const assistantCount = await assistants.count();
+      if (assistantCount > 0) {
+        const observation = await readAssistantObservation(assistants.last());
+        if (assistantObservationChanged(active, assistantCount, observation)) {
+          active.firstVisibleAt ??= observedAt;
+          if (!assistantObservationsEqual(observation, active.observation)) {
+            active.observation = observation;
+          }
+        }
+      }
+      if (
+        typeof active.observation !== "undefined" &&
+        typeof active.loadingAt !== "undefined" &&
+        !loadingVisible
+      ) {
+        await finalize(false);
+      }
+    }
+    if (released) break;
+    await page.waitForTimeout(50);
+  }
+
+  await release;
+  await finalize(true);
+  if (typeof releaseError !== "undefined") throw releaseError;
+  return { conversation, errors, screenshots, timings };
+}
+
+function assistantObservationChanged(
+  turn: LiveManualTurn,
+  assistantCount: number,
+  observation: AssistantObservation,
+): boolean {
+  return (
+    (observation.text.length > 0 || observation.interfaceOffers.length > 0) &&
+    (assistantCount > turn.previousAssistantCount ||
+      !assistantObservationsEqual(observation, turn.previousAssistantObservation))
+  );
+}
+
+function assistantObservationsEqual(
+  left: AssistantObservation,
+  right: AssistantObservation | undefined,
+): boolean {
+  return (
+    typeof right !== "undefined" &&
+    left.text === right.text &&
+    left.interfaceOffers.length === right.interfaceOffers.length &&
+    left.interfaceOffers.every((offer, index) => {
+      const compared = right.interfaceOffers[index];
+      return (
+        offer.kind === compared?.kind &&
+        offer.text === compared.text &&
+        offer.href === compared.href
+      );
+    })
+  );
+}
+
+function startLoadingIndicatorObservation(
+  page: Page,
+  selector: string,
+  now: () => Date,
+  timeout: number,
+): LoadingIndicatorObservation {
+  let observedAt: Date | undefined;
+  const finished = waitForLoadingVisibility(page, selector, true, timeout)
+    .then(() => {
+      observedAt = now();
+    })
+    .catch(() => undefined);
+  return { finished, observedAt: () => observedAt };
+}
+
+async function waitForNoVisibleMatch(
+  page: Page,
+  selector: string,
+  timeout: number,
+): Promise<void> {
+  await waitForLoadingVisibility(page, selector, false, timeout);
+}
+
+async function waitForLoadingVisibility(
+  page: Page,
+  selector: string,
+  visible: boolean,
+  timeout: number,
+): Promise<void> {
+  const result = await page.waitForFunction(
+    ({ loadingSelector, targetVisibility }) => {
+      const anyVisible = Array.from(document.querySelectorAll(loadingSelector)).some(
+        (element) => {
+          const style = getComputedStyle(element);
+          return (
+            style.visibility !== "hidden" &&
+            style.display !== "none" &&
+            element.getClientRects().length > 0
+          );
+        },
+      );
+      return anyVisible === targetVisibility;
+    },
+    { loadingSelector: selector, targetVisibility: visible },
+    { timeout },
+  );
+  await result.dispose();
+}
+
+function appendUserTurn(
+  conversation: ConversationTurn[],
+  text: string,
+  timestamp: string,
+): void {
+  conversation.push({
+    index: conversation.length,
+    role: "user",
+    text,
+    timestamp,
+  });
+}
+
+async function appendCompletedAssistantTurn(input: {
+  readonly completedAt: Date;
+  readonly conversation: ConversationTurn[];
+  readonly observation: AssistantObservation;
+  readonly page: Page;
+  readonly screenshots: ScreenshotCapture[];
+  readonly turnCount: number;
+  readonly turnIndex: number;
+}): Promise<void> {
+  const filename = resultScreenshotFilename(input.turnIndex, input.turnCount);
+  input.screenshots.push({ filename, kind: "result", data: await takeScreenshot(input.page) });
+  input.conversation.push({
+    index: input.conversation.length,
+    role: "assistant",
+    text: input.observation.text,
+    timestamp: input.completedAt.toISOString(),
+    screenshot: `screenshots/${filename}`,
+    ...(input.observation.interfaceOffers.length === 0
+      ? {}
+      : { interfaceOffers: input.observation.interfaceOffers }),
+  });
+}
+
+function elapsedMs(start: Date, end: Date): number {
+  return Math.max(0, end.getTime() - start.getTime());
+}
+
+function resultScreenshotFilename(turnIndex: number, turnCount: number): string {
+  const sequence = String(turnIndex + 2).padStart(2, "0");
+  return turnCount === 1
+    ? `${sequence}-result.png`
+    : `${sequence}-turn-${String(turnIndex + 1).padStart(2, "0")}-result.png`;
 }
 
 async function waitForStableText(locator: Locator): Promise<void> {
@@ -880,58 +1355,101 @@ function toNetworkEvidence(draft: NetworkDraft): NetworkEvidence {
   };
 }
 
-function buildConversation(
+function validateExpectedMessages(
+  expected: readonly string[],
   submissions: readonly UserSubmission[],
-  assistantText: string,
-  assistantTimestamp: string,
-): readonly ConversationTurn[] {
-  const latestSubmission = submissions.at(-1);
-  const userTurns: readonly ConversationTurn[] =
-    typeof latestSubmission === "undefined"
-      ? []
-      : [
-          {
-            index: 0,
-            role: "user",
-            text: latestSubmission.text,
-            timestamp: latestSubmission.timestamp,
-          },
-        ];
-  return [
-    ...userTurns,
-    {
-      index: userTurns.length,
-      role: "assistant",
-      text: assistantText,
-      timestamp: assistantTimestamp,
-      screenshot: "screenshots/02-result.png",
-    },
-  ];
-}
-
-function validateExpectedMessage(
-  expected: string,
-  conversation: readonly ConversationTurn[],
   now: Date,
 ): readonly RecordedError[] {
-  const observed = conversation.find((turn) => turn.role === "user")?.text;
-  if (observed === expected) return [];
-  return [
-    {
+  const errors: RecordedError[] = [];
+  for (const [turnIndex, message] of expected.entries()) {
+    const observed = submissions[turnIndex]?.text;
+    if (observed === message) continue;
+    errors.push({
       timestamp: now.toISOString(),
       message:
         typeof observed === "undefined"
-          ? `No browser submission was observed; expected “${expected}”`
-          : `Observed user submission did not match expected message “${expected}”`,
+          ? `No browser submission was observed for turn ${turnIndex + 1}; expected “${message}”`
+          : `Observed user submission for turn ${turnIndex + 1} did not match expected message “${message}”`,
       source: "browser",
-    },
-  ];
+    });
+  }
+  for (const [turnIndex] of submissions.slice(expected.length).entries()) {
+    errors.push({
+      timestamp: now.toISOString(),
+      message: `Observed an unexpected user submission for turn ${expected.length + turnIndex + 1}`,
+      source: "browser",
+    });
+  }
+  return errors;
 }
 
 async function readAssistantText(page: Page, selector: string): Promise<string> {
   const selected = page.locator(selector).last();
-  if ((await selected.count()) > 0) return (await selected.innerText()).trim();
+  if ((await selected.count()) > 0) return (await readAssistantObservation(selected)).text;
   return (await page.locator("body").innerText()).trim();
+}
+
+async function readAssistantObservations(
+  page: Page,
+  selector: string,
+): Promise<readonly AssistantObservation[]> {
+  const assistants = page.locator(selector);
+  const observations: AssistantObservation[] = [];
+  for (let index = 0; index < (await assistants.count()); index += 1) {
+    const assistant = assistants.nth(index);
+    if (!(await assistant.isVisible())) continue;
+    const observation = await readAssistantObservation(assistant);
+    if (observation.text.length > 0) observations.push(observation);
+  }
+  if (observations.length > 0) return observations;
+  const bodyText = (await page.locator("body").innerText()).trim();
+  return bodyText.length === 0 ? [] : [{ text: bodyText, interfaceOffers: [] }];
+}
+
+async function readAssistantObservation(locator: Locator): Promise<AssistantObservation> {
+  return locator.evaluate((element) => {
+    const suggestedQuestionSelector =
+      '[data-suggested-question], [data-testid*="suggest" i], [class*="suggested-question" i]';
+    const offerSelector =
+      'a, button, [role="button"], [data-suggested-question], [data-testid*="suggest" i], [class*="suggested-question" i]';
+    const isSuggestedQuestion = (candidate: Element): boolean =>
+      candidate.matches(suggestedQuestionSelector);
+    const offers: Array<{
+      href?: string;
+      kind: "button" | "link" | "suggested-question";
+      text: string;
+    }> = [];
+    const seen = new Set<string>();
+    const nestedOffers = Array.from(element.querySelectorAll(offerSelector));
+    const followingSiblingOffers = Array.from(
+      element.parentElement?.querySelectorAll(suggestedQuestionSelector) ?? [],
+    ).filter(
+      (candidate) =>
+        !element.contains(candidate) &&
+        (element.compareDocumentPosition(candidate) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    );
+    for (const candidate of [...nestedOffers, ...followingSiblingOffers]) {
+      const text = (candidate.textContent ?? "").trim();
+      if (text.length === 0) continue;
+      const kind = isSuggestedQuestion(candidate)
+        ? "suggested-question"
+        : candidate instanceof HTMLAnchorElement
+          ? "link"
+          : "button";
+      const href = candidate instanceof HTMLAnchorElement ? candidate.href : undefined;
+      const key = `${kind}\u0000${text}\u0000${href ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      offers.push({ kind, text, ...(typeof href === "undefined" ? {} : { href }) });
+    }
+
+    const textContainer = element.cloneNode(true);
+    if (textContainer instanceof Element) {
+      for (const offered of textContainer.querySelectorAll(offerSelector)) offered.remove();
+    }
+    const text = (textContainer.textContent ?? "").trim();
+    return { interfaceOffers: offers, text };
+  });
 }
 
 async function takeScreenshot(page: Page): Promise<Buffer> {

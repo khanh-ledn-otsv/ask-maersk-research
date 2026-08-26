@@ -15,7 +15,7 @@ const researchCaseSchema = z.strictObject({
   executionMode: z.enum(["automated", "manual"]),
   messages: z
     .array(z.strictObject({ text: nonEmptyText }))
-    .length(1, "must contain exactly one message for a single-case run"),
+    .min(1, "must contain at least one message"),
   captureTrace: z.boolean().default(false),
   notes: nonEmptyText.optional(),
 });

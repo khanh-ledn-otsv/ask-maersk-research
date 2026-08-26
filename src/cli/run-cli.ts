@@ -60,7 +60,7 @@ export async function runCli(
     {
       outputRoot: parsed.options.outputRoot,
       targetUrl: parsed.options.targetUrl,
-      userMessage: parsed.options.userMessage,
+      userMessages: [parsed.options.userMessage],
       waitForCompletion: dependencies.waitForCompletion,
     },
     {
@@ -121,7 +121,7 @@ async function runDeclaredCase(
       interaction,
       outputRoot: parsed.options.outputRoot,
       targetUrl: parsed.options.targetUrl,
-      userMessage: case_.messages[0]?.text ?? "",
+      userMessages: case_.messages.map(({ text }) => text),
       waitForCompletion: dependencies.waitForCompletion,
     },
     {

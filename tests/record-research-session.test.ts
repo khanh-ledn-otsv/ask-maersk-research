@@ -35,6 +35,10 @@ describe("recordResearchSession", () => {
               text: "Please provide a shipment identifier.",
               timestamp: "2026-08-25T16:00:01.000Z",
               screenshot: "screenshots/02-result.png",
+              interfaceOffers: [
+                { kind: "link", text: "Shipment tracking", href: "/tracking" },
+                { kind: "suggested-question", text: "Where is my shipment?" },
+              ],
             },
           ],
           screenshots: [
@@ -59,10 +63,15 @@ describe("recordResearchSession", () => {
               durationMs: 125,
             },
           ],
-          timings: {
-            submittedAt: "2026-08-25T16:00:00.000Z",
-            completedResponseMs: 1_000,
-          },
+          timings: [
+            {
+              turnIndex: 0,
+              submittedAt: "2026-08-25T16:00:00.000Z",
+              firstLoadingIndicatorMs: 100,
+              firstVisibleResponseMs: 250,
+              completedResponseMs: 1_000,
+            },
+          ],
           errors: [],
         };
       },
@@ -72,7 +81,7 @@ describe("recordResearchSession", () => {
       {
         outputRoot,
         targetUrl: "https://example.test/chat",
-        userMessage: "Track my shipment",
+        userMessages: ["Track my shipment"],
         waitForCompletion: async () => undefined,
       },
       {
@@ -107,6 +116,10 @@ describe("recordResearchSession", () => {
           text: "Please provide a shipment identifier.",
           timestamp: "2026-08-25T16:00:01.000Z",
           screenshot: "screenshots/02-result.png",
+          interfaceOffers: [
+            { kind: "link", text: "Shipment tracking", href: "/tracking" },
+            { kind: "suggested-question", text: "Where is my shipment?" },
+          ],
         },
       ],
       screenshots: [
@@ -131,10 +144,15 @@ describe("recordResearchSession", () => {
           durationMs: 125,
         },
       ],
-      timings: {
-        submittedAt: "2026-08-25T16:00:00.000Z",
-        completedResponseMs: 1_000,
-      },
+      timings: [
+        {
+          turnIndex: 0,
+          submittedAt: "2026-08-25T16:00:00.000Z",
+          firstLoadingIndicatorMs: 100,
+          firstVisibleResponseMs: 250,
+          completedResponseMs: 1_000,
+        },
+      ],
       page: {
         url: "https://example.test/chat?mode=guest",
         title: "Ask Maersk",
@@ -171,7 +189,7 @@ describe("recordResearchSession", () => {
           ],
           screenshots: [],
           network: [],
-          timings: { submittedAt: "2026-08-25T16:00:00.000Z" },
+          timings: [{ turnIndex: 0, submittedAt: "2026-08-25T16:00:00.000Z" }],
           errors: [],
         };
       },
@@ -182,7 +200,7 @@ describe("recordResearchSession", () => {
         {
           outputRoot,
           targetUrl: "https://example.test/",
-          userMessage: "Track my shipment",
+          userMessages: ["Track my shipment"],
           waitForCompletion: async () => undefined,
         },
         {

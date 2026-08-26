@@ -12,7 +12,7 @@ export interface BrowserRecorder {
 
 export interface BrowserRecordingInput {
   readonly captureTrace?: boolean;
-  readonly expectedUserMessage: string;
+  readonly expectedUserMessages: readonly string[];
   readonly interaction?: BrowserInteraction;
   readonly targetUrl: string;
   readonly waitForCompletion: () => Promise<void>;
@@ -32,7 +32,7 @@ export interface RecordResearchSessionInput {
   readonly interaction?: BrowserInteraction;
   readonly outputRoot: string;
   readonly targetUrl: string;
-  readonly userMessage: string;
+  readonly userMessages: readonly string[];
   readonly waitForCompletion: () => Promise<void>;
 }
 
@@ -58,7 +58,7 @@ export async function recordResearchSession(
     ...(typeof input.captureTrace === "undefined"
       ? {}
       : { captureTrace: input.captureTrace }),
-    expectedUserMessage: input.userMessage,
+    expectedUserMessages: input.userMessages,
     ...(typeof input.interaction === "undefined" ? {} : { interaction: input.interaction }),
     targetUrl: input.targetUrl,
     waitForCompletion: input.waitForCompletion,
@@ -95,7 +95,7 @@ function buildEvidence(
     conversation: capture.conversation,
     screenshots: capture.screenshots.map(toScreenshotEvidence),
     network: capture.network,
-    timings: { ...capture.timings },
+    timings: capture.timings.map((timing) => ({ ...timing })),
     page: capture.page,
     errors: capture.errors,
   };

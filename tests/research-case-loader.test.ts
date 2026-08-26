@@ -18,7 +18,10 @@ describe("loadResearchCases", () => {
         category: "TRACKING",
         objective: "Observe clarification when a shipment identifier is missing",
         executionMode: "manual",
-        messages: [{ text: "Track my shipment" }],
+        messages: [
+          { text: "Track my shipment" },
+          { text: "Use booking reference ABC123 instead" },
+        ],
       }),
     );
 
@@ -29,7 +32,10 @@ describe("loadResearchCases", () => {
         objective: "Observe clarification when a shipment identifier is missing",
         authenticated: false,
         executionMode: "manual",
-        messages: [{ text: "Track my shipment" }],
+        messages: [
+          { text: "Track my shipment" },
+          { text: "Use booking reference ABC123 instead" },
+        ],
         captureTrace: false,
       },
     ]);
@@ -50,7 +56,7 @@ describe("loadResearchCases", () => {
     );
 
     await expect(loadResearchCases(casesDirectory)).rejects.toThrow(
-      /Invalid research case invalid\.json:.*id: must not be empty.*category:.*objective: must not be empty.*messages: must contain exactly one message.*case: Unrecognized key/u,
+      /Invalid research case invalid\.json:.*id: must not be empty.*category:.*objective: must not be empty.*messages: must contain at least one message.*case: Unrecognized key/u,
     );
   });
 

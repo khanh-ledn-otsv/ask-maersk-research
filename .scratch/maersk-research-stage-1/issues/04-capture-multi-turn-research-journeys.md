@@ -4,10 +4,10 @@
 
 **Blocked by:** 03: Run one declarative research case.
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Declared messages run sequentially in the same browser conversation and preserve their order in evidence.
-- [ ] Each turn records submission, first loading indicator, first visible response, and completed response timing when those signals are observable.
-- [ ] Each completed answer has a presentation-quality screenshot, with a start screenshot and additional exceptional-state screenshots retained.
-- [ ] Links, buttons, and suggested questions exposed by assistant responses are captured without attempting to model every UI component.
-- [ ] Tests demonstrate follow-up context, context switching, timeouts, and partial failure while preserving all evidence captured before failure.
+- [x] Declared messages run sequentially in the same browser conversation and preserve their order in evidence.
+- [x] Each turn records submission, first loading indicator, first visible response, and completed response timing when those signals are observable.
+- [x] Each completed answer has a presentation-quality screenshot, with a start screenshot and additional exceptional-state screenshots retained.
+- [x] Links, buttons, and suggested questions exposed by assistant responses are captured without attempting to model every UI component.
+- [x] Tests demonstrate follow-up context, context switching, timeouts, and partial failure while preserving all evidence captured before failure.

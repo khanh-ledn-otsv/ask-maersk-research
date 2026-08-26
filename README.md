@@ -31,7 +31,7 @@ Each run contains:
 - `evidence.json`: the complete evidence record
 - `conversation.json`: the known user prompt and captured assistant text
 - `metadata.json`: run and page metadata
-- `screenshots/01-start.png` and `screenshots/02-result.png`
+- `screenshots/01-start.png`, one result screenshot per completed answer, and exceptional-state screenshots
 - `network/requests.jsonl`: correlated functional network evidence
 
 Override the configured URL, output directory, or known prompt when needed:
@@ -48,7 +48,7 @@ Research cases are strict JSON files in `cases/`. Run one by its declared ID:
 pnpm research run TRACK-001
 ```
 
-A case declares an ID, category, objective, authentication requirement, execution mode, one message, trace preference, and optional notes. Invalid files and duplicate IDs are reported before browser capture starts. This stage deliberately accepts one message per case; multi-turn journeys are a later capability.
+A case declares an ID, category, objective, authentication requirement, execution mode, one or more ordered messages, trace preference, and optional notes. Invalid files and duplicate IDs are reported before browser capture starts. Automated messages run sequentially in the same browser conversation; manual cases retain every observed submission in order.
 
 ```json
 {
@@ -57,7 +57,10 @@ A case declares an ID, category, objective, authentication requirement, executio
   "objective": "Observe clarification when a shipment identifier is missing",
   "authenticated": false,
   "executionMode": "manual",
-  "messages": [{ "text": "Track my shipment" }],
+  "messages": [
+    { "text": "Track my shipment" },
+    { "text": "Use booking reference ABC123" }
+  ],
   "captureTrace": false,
   "notes": "Use fake shipment data only."
 }
@@ -68,8 +71,11 @@ Manual cases keep recording while the researcher controls the persistent browser
 ```bash
 ASK_MAERSK_INPUT_SELECTOR='[data-testid="question"]' \
 ASK_MAERSK_SUBMIT_SELECTOR='[data-testid="send"]' \
+ASK_MAERSK_LOADING_SELECTOR='[role="progressbar"]' \
 pnpm research run CAPABILITY-001
 ```
+
+For each completed automated turn, evidence records submission time, the first observed loading indicator, the first visible response, completion time, a result screenshot, and links, buttons, or suggested questions exposed with the answer. If a later response times out, the run still saves all completed turns and records the failed turn as diagnostic evidence.
 
 Use `RESEARCH_CASES_DIR` to choose another case directory. A case with `captureTrace: true` also writes `trace/trace.zip` and references it from `evidence.json`.
 
