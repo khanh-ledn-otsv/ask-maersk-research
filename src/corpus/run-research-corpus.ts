@@ -12,12 +12,17 @@ import type {
 } from "../domain/research-case.ts";
 
 export type CorpusSelection =
+  | { readonly all: true }
   | { readonly caseId: string }
   | { readonly category: ResearchCategory };
 
 export type CorpusAnalysisPolicy = AnalysisPolicy;
 
 export type CorpusCaseExecution =
+  | {
+      readonly status: "captured";
+      readonly evidencePath: string;
+    }
   | {
       readonly status: "completed";
       readonly evidencePath: string;
@@ -29,6 +34,12 @@ export type CorpusCaseExecution =
       readonly error: string;
       readonly evidencePath?: string;
     }
+  | {
+      readonly status: "capture-failed";
+      readonly error: string;
+      readonly evidencePath?: string;
+    }
+  | { readonly status: "preflight-required"; readonly reason: string }
   | { readonly status: "skipped"; readonly reason: string };
 
 export interface CorpusCaseDescriptor {
@@ -43,6 +54,11 @@ export interface CorpusCaseDescriptor {
 
 export type CorpusCaseResult = CorpusCaseDescriptor &
   ({
+      readonly status: "captured";
+      readonly evidencePath: string;
+      readonly resumed?: true;
+    }
+  | {
       readonly status: "completed";
       readonly evidencePath: string;
       readonly findingPath: string;
@@ -55,24 +71,44 @@ export type CorpusCaseResult = CorpusCaseDescriptor &
       readonly evidencePath?: string;
     }
   | {
+      readonly status: "capture-failed";
+      readonly error: string;
+      readonly evidencePath?: string;
+    }
+  | {
+      readonly status: "preflight-required";
+      readonly reason: string;
+    }
+  | {
       readonly status: "skipped";
       readonly reason: string;
     });
 
-export interface CorpusSummary {
-  readonly schemaVersion: 1;
+interface CorpusSummaryBase {
   readonly corpusRunId: string;
   readonly startedAt: string;
   readonly completedAt: string;
   readonly selection: CorpusSelection;
-  readonly analysisPolicy: CorpusAnalysisPolicy;
-  readonly aggregateUsage: AnalysisUsage;
   readonly cases: readonly CorpusCaseResult[];
   readonly resumedFrom?: string;
 }
 
-export interface RunResearchCorpusInput {
+export interface AnalyzedCorpusSummary extends CorpusSummaryBase {
+  readonly schemaVersion: 1;
   readonly analysisPolicy: CorpusAnalysisPolicy;
+  readonly aggregateUsage: AnalysisUsage;
+}
+
+export interface CaptureCorpusSummary extends CorpusSummaryBase {
+  readonly schemaVersion: 2;
+  readonly mode: "capture-only";
+  readonly analysisPolicy?: never;
+  readonly aggregateUsage?: never;
+}
+
+export type CorpusSummary = AnalyzedCorpusSummary | CaptureCorpusSummary;
+
+interface RunResearchCorpusInputBase {
   readonly cases: readonly ResearchCase[];
   readonly outputRoot: string;
   readonly resumeFrom?: CorpusSummary;
@@ -80,11 +116,17 @@ export interface RunResearchCorpusInput {
   readonly selection: CorpusSelection;
 }
 
+export type RunResearchCorpusInput = RunResearchCorpusInputBase &
+  (
+    | { readonly mode: "capture-only" }
+    | { readonly analysisPolicy: CorpusAnalysisPolicy; readonly mode?: "analyzed" }
+  );
+
 export interface RunResearchCorpusDependencies {
   readonly createCorpusRunId: () => string;
   readonly executeCase: (
     case_: ResearchCase,
-    analysisPolicy: CorpusAnalysisPolicy,
+    analysisPolicy: CorpusAnalysisPolicy | undefined,
   ) => Promise<CorpusCaseExecution>;
   readonly now: () => Date;
 }
@@ -104,10 +146,14 @@ export async function runResearchCorpus(
   const startedAt = dependencies.now().toISOString();
   const corpusRunId = `${formatRunTimestamp(startedAt)}_${dependencies.createCorpusRunId()}`;
   const runDirectory = join(input.outputRoot, corpusRunId);
+  const resumableStatus = input.mode === "capture-only" ? "captured" : "completed";
   const priorCompleted = new Map(
     (input.resumeFrom?.cases ?? [])
-      .filter((result): result is Extract<CorpusCaseResult, { status: "completed" }> =>
-        result.status === "completed"
+      .filter(
+        (result): result is Extract<
+          CorpusCaseResult,
+          { status: "captured" | "completed" }
+        > => result.status === resumableStatus,
       )
       .map((result) => [result.caseId, result]),
   );
@@ -119,22 +165,34 @@ export async function runResearchCorpus(
       results.push({ ...prior, resumed: true });
       continue;
     }
-    results.push(await executeCase(case_, input.analysisPolicy, dependencies));
+    results.push(
+      await executeCase(
+        case_,
+        input.mode === "capture-only" ? undefined : input.analysisPolicy,
+        input.mode === "capture-only",
+        dependencies,
+      ),
+    );
   }
 
-  const summary: CorpusSummary = {
-    schemaVersion: 1,
+  const commonSummary = {
     corpusRunId,
     startedAt,
     completedAt: dependencies.now().toISOString(),
     selection: input.selection,
-    analysisPolicy: input.analysisPolicy,
-    aggregateUsage: aggregateUsage(results),
     cases: results,
     ...(typeof input.resumeFromPath === "undefined"
       ? {}
       : { resumedFrom: input.resumeFromPath }),
   };
+  const summary: CorpusSummary = input.mode === "capture-only"
+    ? { ...commonSummary, schemaVersion: 2, mode: "capture-only" }
+    : {
+        ...commonSummary,
+        schemaVersion: 1,
+        analysisPolicy: input.analysisPolicy,
+        aggregateUsage: aggregateUsage(results),
+      };
   const summaryPath = join(runDirectory, "summary.json");
   await mkdir(input.outputRoot, { recursive: true });
   await mkdir(runDirectory);
@@ -146,6 +204,7 @@ function selectCases(
   cases: readonly ResearchCase[],
   selection: CorpusSelection,
 ): readonly ResearchCase[] {
+  if ("all" in selection) return cases;
   if ("caseId" in selection) {
     const selected = cases.find(({ id }) => id === selection.caseId);
     if (typeof selected === "undefined") {
@@ -165,9 +224,16 @@ function assertCompatibleResume(input: RunResearchCorpusInput): void {
   if (JSON.stringify(input.resumeFrom.selection) !== JSON.stringify(input.selection)) {
     throw new Error("The resumed summary selection does not match the requested selection.");
   }
+  const resumedCapture = input.resumeFrom.schemaVersion === 2;
+  const requestedCapture = input.mode === "capture-only";
+  if (resumedCapture !== requestedCapture) {
+    throw new Error("The resumed summary mode does not match the requested mode.");
+  }
   if (
-    input.resumeFrom.analysisPolicy.model !== input.analysisPolicy.model ||
-    input.resumeFrom.analysisPolicy.reasoningEffort !== input.analysisPolicy.reasoningEffort
+    !requestedCapture &&
+    input.resumeFrom.schemaVersion === 1 &&
+    (input.resumeFrom.analysisPolicy.model !== input.analysisPolicy.model ||
+      input.resumeFrom.analysisPolicy.reasoningEffort !== input.analysisPolicy.reasoningEffort)
   ) {
     throw new Error("The resumed summary analysis policy does not match the requested policy.");
   }
@@ -175,7 +241,8 @@ function assertCompatibleResume(input: RunResearchCorpusInput): void {
 
 async function executeCase(
   case_: ResearchCase,
-  analysisPolicy: CorpusAnalysisPolicy,
+  analysisPolicy: CorpusAnalysisPolicy | undefined,
+  captureOnly: boolean,
   dependencies: RunResearchCorpusDependencies,
 ): Promise<CorpusCaseResult> {
   const caseDescriptor = {
@@ -193,7 +260,7 @@ async function executeCase(
   } catch (error: unknown) {
     return {
       ...caseDescriptor,
-      status: "failed",
+      status: captureOnly ? "capture-failed" : "failed",
       error: error instanceof Error ? error.message : String(error),
     };
   }

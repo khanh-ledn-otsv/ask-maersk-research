@@ -29,24 +29,15 @@ export interface ExecuteCorpusCaseDependencies {
   readonly now: () => Date;
 }
 
+export type CaptureCorpusCaseDependencies = Omit<ExecuteCorpusCaseDependencies, "analyzer">;
+
 export async function executeCorpusCase(
   case_: ResearchCase,
   analysisPolicy: CorpusAnalysisPolicy,
   options: ExecuteCorpusCaseOptions,
   dependencies: ExecuteCorpusCaseDependencies,
 ): Promise<CorpusCaseExecution> {
-  const recorded = await recordResearchSession(
-    {
-      captureTrace: case_.captureTrace,
-      caseId: case_.id,
-      interaction: options.interaction,
-      outputRoot: options.outputRoot,
-      targetUrl: options.targetUrl,
-      userMessages: case_.messages.map(({ text }) => text),
-      waitForCompletion: options.waitForCompletion,
-    },
-    dependencies,
-  );
+  const recorded = await recordCase(case_, options, dependencies);
   const evidencePath = join(recorded.runDirectory, "evidence.json");
 
   try {
@@ -75,4 +66,35 @@ export async function executeCorpusCase(
       evidencePath,
     };
   }
+}
+
+export async function captureCorpusCase(
+  case_: ResearchCase,
+  options: ExecuteCorpusCaseOptions,
+  dependencies: CaptureCorpusCaseDependencies,
+): Promise<CorpusCaseExecution> {
+  const recorded = await recordCase(case_, options, dependencies);
+  return {
+    status: "captured",
+    evidencePath: join(recorded.runDirectory, "evidence.json"),
+  };
+}
+
+async function recordCase(
+  case_: ResearchCase,
+  options: ExecuteCorpusCaseOptions,
+  dependencies: CaptureCorpusCaseDependencies,
+) {
+  return recordResearchSession(
+    {
+      captureTrace: case_.captureTrace,
+      caseId: case_.id,
+      interaction: options.interaction,
+      outputRoot: options.outputRoot,
+      targetUrl: options.targetUrl,
+      userMessages: case_.messages.map(({ text }) => text),
+      waitForCompletion: options.waitForCompletion,
+    },
+    dependencies,
+  );
 }

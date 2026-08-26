@@ -123,6 +123,21 @@ pnpm research corpus --category KNOWLEDGE \
 
 Resume creates another immutable summary, reuses completed case results, and retries failed or skipped cases. The selection and model policy must match the prior summary. Use `RESEARCH_CORPUS_OUTPUT_DIR` or `--summary-output` to move summaries, and the existing `RESEARCH_OUTPUT_DIR` or `--output` setting to move evidence runs.
 
+To capture the complete corpus without an API key or any model cost, run:
+
+```bash
+pnpm research corpus --all --capture-only
+```
+
+Capture-only summaries use a separate schema that records `captured`, `capture-failed`, `skipped`, and `preflight-required` cases without analysis policy, token usage, or invented finding paths. Automated cases with configured selectors capture normally. Authorized-data manual cases are safely skipped; fake-data manual cases remain visible as requiring setup. Neither pauses the all-case run for terminal input. The CLI prints a concrete existing `research analyze` command for every captured case, but never runs one automatically.
+
+Resume capture into a new immutable summary with the same selection:
+
+```bash
+pnpm research corpus --all --capture-only \
+  --resume data/corpus-runs/<previous-capture-id>/summary.json
+```
+
 ## Generate the manager-ready report
 
 Turn a corpus summary into a concise, evidence-linked Markdown report:

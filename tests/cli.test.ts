@@ -538,6 +538,165 @@ describe("research CLI", () => {
     expect(summary.aggregateUsage).toEqual({ inputTokens: 100, outputTokens: 20 });
     expect(output).toContain(`Corpus summary saved: ${summaryPath}`);
   });
+
+  test("corpus captures every eligible case without creating an analyzer or requiring an API key", async () => {
+    const outputRoot = await temporaryDirectories.create("maersk-capture-runs-");
+    const summaryRoot = await temporaryDirectories.create("maersk-capture-summaries-");
+    const output: string[] = [];
+    let analyzerCreations = 0;
+    let runId = 0;
+
+    const exitCode = await runCli(["corpus", "--all", "--capture-only"], {
+      browser: createBrowser(async () => undefined),
+      createAnalyzer: () => {
+        analyzerCreations += 1;
+        throw new Error("capture-only must not create an analyzer");
+      },
+      createCorpusRunId: () => "all-capture",
+      createRunId: () => `capture-${++runId}`,
+      environment: {
+        ASK_MAERSK_INPUT_SELECTOR: "[data-testid=question]",
+        ASK_MAERSK_URL: "https://example.test/ask-maersk",
+        RESEARCH_CASES_DIR: join(process.cwd(), "cases"),
+        RESEARCH_CORPUS_OUTPUT_DIR: summaryRoot,
+        RESEARCH_OUTPUT_DIR: outputRoot,
+      },
+      now: () => new Date("2026-08-26T09:00:00.000Z"),
+      stdout: (message) => output.push(message),
+      waitForCompletion: async () => {
+        throw new Error("capture-only all must not wait for terminal input");
+      },
+    });
+
+    expect(exitCode).toBe(0);
+    expect(analyzerCreations).toBe(0);
+    const summaryPath = join(
+      summaryRoot,
+      "2026-08-26_090000_all-capture",
+      "summary.json",
+    );
+    const summary = JSON.parse(await readFile(summaryPath, "utf8")) as {
+      aggregateUsage?: unknown;
+      analysisPolicy?: unknown;
+      cases: { caseId: string; evidencePath?: string; findingPath?: string; status: string }[];
+      mode: string;
+      schemaVersion: number;
+      selection: unknown;
+    };
+    expect(summary).toMatchObject({
+      schemaVersion: 2,
+      mode: "capture-only",
+      selection: { all: true },
+    });
+    expect(summary.analysisPolicy).toBeUndefined();
+    expect(summary.aggregateUsage).toBeUndefined();
+    expect(summary.cases).toHaveLength(21);
+    expect(summary.cases.some(({ status }) => status === "captured")).toBe(true);
+    expect(summary.cases.some(({ status }) => status === "skipped")).toBe(true);
+    expect(summary.cases.some(({ status }) => status === "preflight-required")).toBe(true);
+    expect(summary.cases.every(({ findingPath }) => typeof findingPath === "undefined")).toBe(true);
+    expect(summary.cases[0]?.caseId).toBe("AUTH-001");
+    expect(summary.cases.at(-1)?.caseId).toBe("TRACKING-003");
+    expect(output).toContain(`Corpus summary saved: ${summaryPath}`);
+    expect(output).toContain(
+      `Next paid step (CAPABILITY-001): pnpm research analyze ${join(outputRoot, "2026-08-26_090000_capture-1")}`,
+    );
+  });
+
+  test("capture-only resume preserves captured evidence and retries capture failures", async () => {
+    const casesDirectory = await temporaryDirectories.create("maersk-capture-cases-");
+    const outputRoot = await temporaryDirectories.create("maersk-capture-evidence-");
+    const summaryRoot = await temporaryDirectories.create("maersk-capture-resume-");
+    for (const id of ["TRACK-001", "TRACK-002"]) {
+      await writeResearchCase(casesDirectory, {
+        id,
+        category: "TRACKING",
+        objective: `Capture ${id}`,
+        executionMode: "automated",
+        messages: [{ text: `Prompt ${id}` }],
+      });
+    }
+    const common = {
+      createRunId: (() => {
+        let id = 0;
+        return () => `evidence-${++id}`;
+      })(),
+      environment: {
+        ASK_MAERSK_INPUT_SELECTOR: "[data-testid=question]",
+        ASK_MAERSK_URL: "https://example.test/ask-maersk",
+        RESEARCH_CASES_DIR: casesDirectory,
+        RESEARCH_CORPUS_OUTPUT_DIR: summaryRoot,
+        RESEARCH_OUTPUT_DIR: outputRoot,
+      },
+      now: () => new Date("2026-08-26T10:00:00.000Z"),
+      stdout: () => undefined,
+      waitForCompletion: async () => undefined,
+    };
+    const firstExit = await runCli(
+      ["corpus", "--category", "TRACKING", "--capture-only"],
+      {
+        ...common,
+        browser: createBrowser(async ({ expectedUserMessages }) => {
+          if (expectedUserMessages[0] === "Prompt TRACK-002") {
+            throw new Error("temporary browser failure");
+          }
+        }),
+        createCorpusRunId: () => "first-capture",
+      },
+    );
+    const firstSummaryPath = join(
+      summaryRoot,
+      "2026-08-26_100000_first-capture",
+      "summary.json",
+    );
+    const firstSummaryBeforeResume = await readFile(firstSummaryPath, "utf8");
+    const firstSummary = JSON.parse(firstSummaryBeforeResume) as {
+      cases: { caseId: string; status: string }[];
+    };
+
+    expect(firstExit).toBe(1);
+    expect(firstSummary.cases.map(({ caseId, status }) => [caseId, status])).toEqual([
+      ["TRACK-001", "captured"],
+      ["TRACK-002", "capture-failed"],
+    ]);
+
+    const retriedPrompts: string[] = [];
+    const resumedExit = await runCli(
+      [
+        "corpus",
+        "--category",
+        "TRACKING",
+        "--capture-only",
+        "--resume",
+        firstSummaryPath,
+      ],
+      {
+        ...common,
+        browser: createBrowser(async ({ expectedUserMessages }) => {
+          retriedPrompts.push(expectedUserMessages[0] ?? "");
+        }),
+        createCorpusRunId: () => "resumed-capture",
+      },
+    );
+    const resumedSummaryPath = join(
+      summaryRoot,
+      "2026-08-26_100000_resumed-capture",
+      "summary.json",
+    );
+    const resumedSummary = JSON.parse(await readFile(resumedSummaryPath, "utf8")) as {
+      cases: { caseId: string; resumed?: boolean; status: string }[];
+      resumedFrom: string;
+    };
+
+    expect(resumedExit).toBe(0);
+    expect(retriedPrompts).toEqual(["Prompt TRACK-002"]);
+    expect(resumedSummary.cases).toMatchObject([
+      { caseId: "TRACK-001", status: "captured", resumed: true },
+      { caseId: "TRACK-002", status: "captured" },
+    ]);
+    expect(resumedSummary.resumedFrom).toBe(firstSummaryPath);
+    expect(await readFile(firstSummaryPath, "utf8")).toBe(firstSummaryBeforeResume);
+  });
 });
 
 type CaptureInput = Parameters<BrowserRecorder["capture"]>[0];

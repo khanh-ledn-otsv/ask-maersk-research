@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Analyzer } from "../analysis/analyze-evidence.ts";
 import { loadResearchCases } from "../cases/load-research-cases.ts";
 import { resolveCaseInteraction } from "../cases/resolve-case-interaction.ts";
-import { executeCorpusCase } from "../corpus/execute-corpus-case.ts";
+import { captureCorpusCase, executeCorpusCase } from "../corpus/execute-corpus-case.ts";
 import {
   runResearchCorpus,
   type CorpusAnalysisPolicy,
@@ -32,7 +32,8 @@ export interface CorpusCliDependencies {
 }
 
 interface CorpusOptions {
-  readonly analysisPolicy: CorpusAnalysisPolicy;
+  readonly analysisPolicy?: CorpusAnalysisPolicy;
+  readonly captureOnly: boolean;
   readonly casesDirectory: string;
   readonly evidenceOutputRoot: string;
   readonly inputSelector?: string;
@@ -57,14 +58,18 @@ export async function runCorpus(
     stderr(parsed.message);
     return 1;
   }
-  const apiKey = dependencies.environment.OPEN_AI_API_KEY;
-  if (typeof apiKey === "undefined" || apiKey.trim().length === 0) {
-    stderr("OPEN_AI_API_KEY is required for corpus analysis.");
-    return 1;
-  }
-  if (typeof dependencies.createAnalyzer === "undefined") {
-    stderr("Corpus analysis is not configured.");
-    return 1;
+  let analyzer: Analyzer | undefined;
+  if (!parsed.options.captureOnly) {
+    const apiKey = dependencies.environment.OPEN_AI_API_KEY;
+    if (typeof apiKey === "undefined" || apiKey.trim().length === 0) {
+      stderr("OPEN_AI_API_KEY is required for corpus analysis.");
+      return 1;
+    }
+    if (typeof dependencies.createAnalyzer === "undefined") {
+      stderr("Corpus analysis is not configured.");
+      return 1;
+    }
+    analyzer = dependencies.createAnalyzer(apiKey);
   }
 
   try {
@@ -74,11 +79,12 @@ export async function runCorpus(
         ? Promise.resolve(undefined)
         : readCorpusSummary(parsed.options.resumePath),
     ]);
-    const analyzer = dependencies.createAnalyzer(apiKey);
     const result = await runResearchCorpus(
       {
-        analysisPolicy: parsed.options.analysisPolicy,
         cases,
+        ...(parsed.options.captureOnly
+          ? { mode: "capture-only" as const }
+          : { analysisPolicy: parsed.options.analysisPolicy!, mode: "analyzed" as const }),
         outputRoot: parsed.options.summaryOutputRoot,
         selection: parsed.options.selection,
         ...(typeof resumeFrom === "undefined" ? {} : { resumeFrom }),
@@ -94,8 +100,20 @@ export async function runCorpus(
       },
     );
     dependencies.stdout(`Corpus summary saved: ${result.summaryPath}`);
-    dependencies.stdout(formatCorpusUsage(result.summary));
-    return result.summary.cases.some(({ status }) => status === "failed") ? 1 : 0;
+    if (result.summary.schemaVersion === 2) {
+      for (const case_ of result.summary.cases) {
+        if (case_.status === "captured") {
+          dependencies.stdout(
+            `Next paid step (${case_.caseId}): pnpm research analyze ${dirname(case_.evidencePath)}`,
+          );
+        }
+      }
+    } else {
+      dependencies.stdout(formatCorpusUsage(result.summary));
+    }
+    return result.summary.cases.some(({ status }) =>
+      status === "failed" || status === "capture-failed"
+    ) ? 1 : 0;
   } catch (error: unknown) {
     stderr(`Corpus run failed: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
@@ -104,16 +122,30 @@ export async function runCorpus(
 
 async function executeSelectedCase(
   case_: ResearchCase,
-  policy: CorpusAnalysisPolicy,
+  policy: CorpusAnalysisPolicy | undefined,
   options: CorpusOptions,
-  analyzer: Analyzer,
+  analyzer: Analyzer | undefined,
   dependencies: CorpusCliDependencies,
 ): Promise<CorpusCaseExecution> {
+  if (options.captureOnly && case_.executionMode === "manual") {
+    if (case_.dataPolicy === "authorized") {
+      return {
+        status: "skipped",
+        reason: "Authorized-data case safely skipped until approved test data is configured.",
+      };
+    }
+    return {
+      status: "preflight-required",
+      reason: "Manual case requires fake test data and researcher setup before capture.",
+    };
+  }
   const interaction = resolveCaseInteraction(case_, options);
   if (typeof interaction === "undefined") {
     return {
-      status: "skipped",
-      reason: "Automated case skipped because ASK_MAERSK_INPUT_SELECTOR is not configured.",
+      status: options.captureOnly ? "preflight-required" : "skipped",
+      reason: options.captureOnly
+        ? "Automated case requires ASK_MAERSK_INPUT_SELECTOR before capture."
+        : "Automated case skipped because ASK_MAERSK_INPUT_SELECTOR is not configured.",
     };
   }
   dependencies.stdout(`Running ${case_.id}: ${case_.objective}`);
@@ -122,22 +154,24 @@ async function executeSelectedCase(
       "Interact with Ask Maersk, then return here and press Enter to save evidence.",
     );
   }
-  return executeCorpusCase(
-    case_,
-    policy,
-    {
-      interaction,
-      outputRoot: options.evidenceOutputRoot,
-      targetUrl: options.targetUrl,
-      waitForCompletion: dependencies.waitForCompletion,
-    },
-    {
-      analyzer,
-      browser: dependencies.browser,
-      createRunId: dependencies.createRunId,
-      now: dependencies.now,
-    },
-  );
+  const executionOptions = {
+    interaction,
+    outputRoot: options.evidenceOutputRoot,
+    targetUrl: options.targetUrl,
+    waitForCompletion: dependencies.waitForCompletion,
+  };
+  const executionDependencies = {
+    browser: dependencies.browser,
+    createRunId: dependencies.createRunId,
+    now: dependencies.now,
+  };
+  if (options.captureOnly) {
+    return captureCorpusCase(case_, executionOptions, executionDependencies);
+  }
+  return executeCorpusCase(case_, policy!, executionOptions, {
+    ...executionDependencies,
+    analyzer: analyzer!,
+  });
 }
 
 function parseCorpusOptions(
@@ -145,8 +179,10 @@ function parseCorpusOptions(
   environment: Readonly<Record<string, string | undefined>>,
 ): CorpusOptionsResult {
   const parsedFlags = parseFlags(arguments_, [
+    "--all",
     "--case",
     "--cases",
+    "--capture-only",
     "--category",
     "--input-selector",
     "--model",
@@ -156,14 +192,24 @@ function parseCorpusOptions(
     "--submit-selector",
     "--summary-output",
     "--url",
-  ]);
+  ], ["--all", "--capture-only"]);
   if (!parsedFlags.ok) return parsedFlags;
   const caseId = parsedFlags.values.get("--case");
   const category = parsedFlags.values.get("--category");
-  if ((typeof caseId === "undefined") === (typeof category === "undefined")) {
+  const all = parsedFlags.values.has("--all");
+  const captureOnly = parsedFlags.values.has("--capture-only");
+  const selectionCount = Number(typeof caseId !== "undefined") +
+    Number(typeof category !== "undefined") + Number(all);
+  if (selectionCount !== 1) {
     return {
       ok: false,
-      message: "Corpus selection requires exactly one of --case <id> or --category <category>.",
+      message: "Corpus selection requires exactly one of --all, --case <id>, or --category <category>.",
+    };
+  }
+  if (all && !captureOnly) {
+    return {
+      ok: false,
+      message: "--all requires --capture-only to prevent unapproved analysis cost.",
     };
   }
   if (typeof category !== "undefined" && !isResearchCategory(category)) {
@@ -183,10 +229,10 @@ function parseCorpusOptions(
   if (parsedUrl === null || (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:")) {
     return { ok: false, message: "Ask Maersk URL must be an http:// or https:// URL." };
   }
-  const policy = resolveAnalysisPolicy(parsedFlags.values, environment);
-  if (!policy.ok) return policy;
+  const policy = captureOnly ? undefined : resolveAnalysisPolicy(parsedFlags.values, environment);
+  if (typeof policy !== "undefined" && !policy.ok) return policy;
   const selection: CorpusSelection =
-    typeof caseId === "undefined" ? { category: category! } : { caseId };
+    all ? { all: true } : typeof caseId === "undefined" ? { category: category! } : { caseId };
   const inputSelector =
     parsedFlags.values.get("--input-selector") ?? environment.ASK_MAERSK_INPUT_SELECTOR;
   const submitSelector =
@@ -195,7 +241,7 @@ function parseCorpusOptions(
   return {
     ok: true,
     options: {
-      analysisPolicy: policy.policy,
+      captureOnly,
       casesDirectory:
         parsedFlags.values.get("--cases") ??
         environment.RESEARCH_CASES_DIR ??
@@ -210,6 +256,7 @@ function parseCorpusOptions(
         environment.RESEARCH_CORPUS_OUTPUT_DIR ??
         join(process.cwd(), "data", "corpus-runs"),
       targetUrl: parsedUrl.toString(),
+      ...(typeof policy === "undefined" ? {} : { analysisPolicy: policy.policy }),
       ...(typeof inputSelector === "undefined" ? {} : { inputSelector }),
       ...(typeof submitSelector === "undefined" ? {} : { submitSelector }),
       ...(typeof resumePath === "undefined" ? {} : { resumePath }),
@@ -227,16 +274,20 @@ async function readCorpusSummary(path: string): Promise<CorpusSummary> {
     typeof value !== "object" ||
     value === null ||
     !("schemaVersion" in value) ||
-    value.schemaVersion !== 1 ||
+    (value.schemaVersion !== 1 && value.schemaVersion !== 2) ||
     !("cases" in value) ||
     !Array.isArray(value.cases)
   ) {
     throw new Error(`Invalid corpus summary: ${path}.`);
   }
+  if (value.schemaVersion === 2 && (!("mode" in value) || value.mode !== "capture-only")) {
+    throw new Error(`Invalid capture-only corpus summary: ${path}.`);
+  }
   return value as CorpusSummary;
 }
 
 function formatCorpusUsage(summary: CorpusSummary): string {
+  if (summary.schemaVersion !== 1) return "Capture-only corpus: no analysis usage.";
   return formatAnalysisUsage(
     summary.analysisPolicy,
     summary.aggregateUsage,

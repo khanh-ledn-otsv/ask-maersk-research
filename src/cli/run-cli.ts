@@ -237,7 +237,7 @@ function resolveCommonOptions(
 
 function reportUsage(stderr: (message: string) => void): 1 {
   stderr(
-    "Usage: pnpm research <record [options] | run <case-id> [options] | analyze <run-directory> [options] | corpus <--case id | --category category> [options] | report <corpus-summary> [options]>",
+    "Usage: pnpm research <record [options] | run <case-id> [options] | analyze <run-directory> [options] | corpus <--all --capture-only | --case id | --category category> [options] | report <corpus-summary> [options]>",
   );
   return 1;
 }

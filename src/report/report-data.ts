@@ -1,7 +1,10 @@
 import { access, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { EvidenceReference, Finding } from "../analysis/analyze-evidence.ts";
-import type { CorpusCaseResult, CorpusSummary } from "../corpus/run-research-corpus.ts";
+import type {
+  AnalyzedCorpusSummary,
+  CorpusCaseResult,
+} from "../corpus/run-research-corpus.ts";
 import type { CaseEvidence } from "../domain/evidence.ts";
 
 export type ReferenceKey = string & { readonly referenceKey: unique symbol };
@@ -27,11 +30,11 @@ export interface ReportData {
 
 export interface LoadedReportData {
   readonly data: ReportData;
-  readonly summary: CorpusSummary;
+  readonly summary: AnalyzedCorpusSummary;
 }
 
 export async function loadReportData(summaryPath: string): Promise<LoadedReportData> {
-  const summary = await readJson<CorpusSummary>(summaryPath);
+  const summary = await readJson<unknown>(summaryPath);
   assertCorpusSummary(summary, summaryPath);
   const available: LoadedCase[] = [];
   const unavailable: UnavailableCase[] = summary.cases.flatMap((result) =>
@@ -132,8 +135,18 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-function assertCorpusSummary(value: CorpusSummary, path: string): void {
-  if (value.schemaVersion !== 1 || !Array.isArray(value.cases)) {
+function assertCorpusSummary(
+  value: unknown,
+  path: string,
+): asserts value is AnalyzedCorpusSummary {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("schemaVersion" in value) ||
+    value.schemaVersion !== 1 ||
+    !("cases" in value) ||
+    !Array.isArray(value.cases)
+  ) {
     throw new Error(`Invalid corpus summary: ${path}.`);
   }
 }

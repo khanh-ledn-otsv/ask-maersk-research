@@ -4,11 +4,15 @@
 
 **Blocked by:** 06: Build and run the representative research corpus.
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] `pnpm research corpus --all --capture-only` selects the complete case corpus in deterministic order and does not require `OPEN_AI_API_KEY`.
-- [ ] Capture-only execution never creates an analyzer, invokes a model, or writes a fabricated `findingPath`.
-- [ ] The immutable corpus summary distinguishes captured evidence, capture failure, safe skip, and manual/preflight-required cases.
-- [ ] Existing analyzed corpus summaries remain readable, and the current per-case/per-category workflow remains backward compatible.
-- [ ] Capture-only output tells the researcher exactly which paid analysis command can be run next.
-- [ ] Tests prove complete selection, zero model calls, partial capture visibility, resumability, and backward-compatible summary loading.
+- [x] `pnpm research corpus --all --capture-only` selects the complete case corpus in deterministic order and does not require `OPEN_AI_API_KEY`.
+- [x] Capture-only execution never creates an analyzer, invokes a model, or writes a fabricated `findingPath`.
+- [x] The immutable corpus summary distinguishes captured evidence, capture failure, safe skip, and manual/preflight-required cases.
+- [x] Existing analyzed corpus summaries remain readable, and the current per-case/per-category workflow remains backward compatible.
+- [x] Capture-only output tells the researcher exactly which paid analysis command can be run next.
+- [x] Tests prove complete selection, zero model calls, partial capture visibility, resumability, and backward-compatible summary loading.
+
+## Comments
+
+- 2026-08-26: Added schema-v2 capture-only summaries, deterministic `--all` selection, zero-model capture, explicit capture/preflight/skip/failure outcomes, immutable resume, and concrete per-case paid-analysis guidance. Legacy analyzed summaries and report generation remain compatible; typecheck and all 54 tests pass.

@@ -6,12 +6,12 @@ import type {
   EvidenceReference,
   Finding,
 } from "../analysis/analyze-evidence.ts";
-import type { CorpusSummary } from "../corpus/run-research-corpus.ts";
+import type { AnalyzedCorpusSummary } from "../corpus/run-research-corpus.ts";
 import type { NetworkEvidence } from "../domain/evidence.ts";
 import { referenceKey, type LoadedCase, type ReportData } from "./report-data.ts";
 
 export function renderResearchReport(
-  summary: CorpusSummary,
+  summary: AnalyzedCorpusSummary,
   data: ReportData,
   outputPath: string,
 ): string {
@@ -337,7 +337,7 @@ function renderEvidenceHighlights(
 }
 
 function renderAnalysisCost(
-  summary: CorpusSummary,
+  summary: AnalyzedCorpusSummary,
   cases: readonly LoadedCase[],
 ): string[] {
   const usage = summary.aggregateUsage;
