@@ -16,7 +16,13 @@ const assistantSelector = process.env.ASK_MAERSK_ASSISTANT_SELECTOR;
 const loadingSelector = process.env.ASK_MAERSK_LOADING_SELECTOR;
 const browser = createPlaywrightBrowserRecorder({
   userDataDirectory,
-  headless: process.argv[2] !== "preflight" && process.env.RESEARCH_HEADLESS === "true",
+  headless: process.env.RESEARCH_HEADLESS === "true",
+  ...(typeof assistantSelector === "undefined" ? {} : { assistantSelector }),
+  ...(typeof loadingSelector === "undefined" ? {} : { loadingSelector }),
+});
+const browserPreflight = createPlaywrightBrowserRecorder({
+  userDataDirectory,
+  headless: false,
   ...(typeof assistantSelector === "undefined" ? {} : { assistantSelector }),
   ...(typeof loadingSelector === "undefined" ? {} : { loadingSelector }),
 });
@@ -24,6 +30,7 @@ const browser = createPlaywrightBrowserRecorder({
 try {
   process.exitCode = await runCli(process.argv.slice(2), {
     browser,
+    browserPreflight,
     createAnalyzer: createOpenAIEvidenceAnalyzer,
     createCorpusRunId: () => randomUUID().slice(0, 8),
     createRunId: () => randomUUID().slice(0, 8),

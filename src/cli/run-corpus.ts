@@ -1,8 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Analyzer } from "../analysis/analyze-evidence.ts";
+import type { BrowserPreflight, BrowserPreflightResult } from "../browser/browser-preflight.ts";
+import { loadApprovedTestData } from "../cases/load-approved-test-data.ts";
 import { loadResearchCases } from "../cases/load-research-cases.ts";
 import { prepareUnattendedCase } from "../cases/prepare-unattended-case.ts";
+import { createPreflightFingerprint } from "../cases/preflight-fingerprint.ts";
 import { resolveCaseInteraction } from "../cases/resolve-case-interaction.ts";
 import { captureCorpusCase, executeCorpusCase } from "../corpus/execute-corpus-case.ts";
 import {
@@ -23,6 +26,7 @@ import { parseFlags } from "./parse-flags.ts";
 
 export interface CorpusCliDependencies {
   readonly browser: BrowserRecorder;
+  readonly browserPreflight?: BrowserPreflight;
   readonly createAnalyzer?: (apiKey: string) => Analyzer;
   readonly createCorpusRunId?: () => string;
   readonly createRunId: () => string;
@@ -83,27 +87,38 @@ export async function runCorpus(
     return 1;
   }
   try {
-    if (parsed.options.mode === "capture-only" && dependencies.environment.RESEARCH_HEADLESS === "true") {
-      const receiptPath = dependencies.environment.RESEARCH_PREFLIGHT_RECEIPT ?? join(process.cwd(), ".research", "preflight.json");
-      if (!(await hasMatchingPreflightReceipt(receiptPath, parsed.options))) {
-        stderr("Headless capture requires a matching successful preflight. Run: pnpm research preflight --all");
-        return 1;
-      }
-    }
     const [cases, resumeFrom, testData] = await Promise.all([
       loadResearchCases(parsed.options.casesDirectory),
       typeof parsed.options.resumePath === "undefined"
         ? Promise.resolve(undefined)
         : readCorpusSummary(parsed.options.resumePath),
-      loadTestData(parsed.options.testDataPath),
+      loadApprovedTestData(parsed.options.testDataPath),
     ]);
-    const browserPreflight = parsed.options.mode === "capture-only" && typeof dependencies.browser.preflight !== "undefined"
-      ? await dependencies.browser.preflight({
+    let receiptPreflight: BrowserPreflightResult | undefined;
+    if (parsed.options.mode === "capture-only" && dependencies.environment.RESEARCH_HEADLESS === "true") {
+      const receiptPath = dependencies.environment.RESEARCH_PREFLIGHT_RECEIPT ?? join(process.cwd(), ".research", "preflight.json");
+      const fingerprint = createPreflightFingerprint({
+        allowAuthorizedData: parsed.options.allowAuthorizedData,
+        cases,
+        ...(typeof parsed.options.inputSelector === "undefined" ? {} : { inputSelector: parsed.options.inputSelector }),
+        selection: parsed.options.selection,
+        ...(typeof parsed.options.submitSelector === "undefined" ? {} : { submitSelector: parsed.options.submitSelector }),
+        targetUrl: parsed.options.targetUrl,
+        testData,
+      });
+      receiptPreflight = await readMatchingPreflightReceipt(receiptPath, fingerprint);
+      if (typeof receiptPreflight === "undefined") {
+        stderr("Headless capture requires a matching successful preflight. Run: pnpm research preflight --all");
+        return 1;
+      }
+    }
+    const browserPreflight = receiptPreflight ?? (parsed.options.mode === "capture-only" && typeof dependencies.browserPreflight !== "undefined"
+      ? await dependencies.browserPreflight.preflight({
           inputSelector: parsed.options.inputSelector ?? "",
           ...(typeof parsed.options.submitSelector === "undefined" ? {} : { submitSelector: parsed.options.submitSelector }),
           targetUrl: parsed.options.targetUrl,
         })
-      : undefined;
+      : undefined);
     const execution = createCorpusExecution(parsed.options, dependencies, stderr, {
       authenticated: browserPreflight?.authenticated ?? true,
       browserIssues: browserPreflight?.issues ?? [],
@@ -366,33 +381,31 @@ function parseCorpusOptions(
   };
 }
 
-async function loadTestData(path: string | undefined): Promise<Readonly<Record<string, string>>> {
-  if (typeof path === "undefined") return {};
-  const value = JSON.parse(await readFile(path, "utf8")) as unknown;
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`Approved test-data file must contain a JSON object: ${path}.`);
-  }
-  const entries = Object.entries(value);
-  if (entries.some(([, item]) => typeof item !== "string" || item.trim().length === 0)) {
-    throw new Error(`Approved test-data values must be non-empty strings: ${path}.`);
-  }
-  return Object.fromEntries(entries) as Readonly<Record<string, string>>;
-}
-
-async function hasMatchingPreflightReceipt(path: string, options: CorpusOptionsBase): Promise<boolean> {
+async function readMatchingPreflightReceipt(
+  path: string,
+  fingerprint: string,
+): Promise<BrowserPreflightResult | undefined> {
   try {
     const value = JSON.parse(await readFile(path, "utf8")) as {
+      browser?: BrowserPreflightResult;
       cases?: { status?: unknown }[];
-      inputSelector?: unknown;
-      targetUrl?: unknown;
+      configurationFingerprint?: unknown;
     };
-    return value.targetUrl === options.targetUrl &&
-      value.inputSelector === options.inputSelector &&
+    const matches = value.configurationFingerprint === fingerprint &&
       Array.isArray(value.cases) &&
       value.cases.some(({ status }) => status === "preflight-ready");
+    return matches && isBrowserPreflightResult(value.browser) ? value.browser : undefined;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+function isBrowserPreflightResult(value: unknown): value is BrowserPreflightResult {
+  return typeof value === "object" && value !== null &&
+    "authenticated" in value && typeof value.authenticated === "boolean" &&
+    "pageUrl" in value && typeof value.pageUrl === "string" &&
+    "issues" in value && Array.isArray(value.issues) &&
+    value.issues.every((issue) => typeof issue === "string");
 }
 
 function isResearchCategory(value: string): value is ResearchCategory {

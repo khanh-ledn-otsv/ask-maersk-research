@@ -90,6 +90,7 @@ async function recordCase(
       captureTrace: case_.captureTrace,
       caseId: case_.id,
       interaction: options.interaction,
+      isolateSession: true,
       outputRoot: options.outputRoot,
       targetUrl: options.targetUrl,
       userMessages: case_.messages.map(({ text }) => text),

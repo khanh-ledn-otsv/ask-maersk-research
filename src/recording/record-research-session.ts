@@ -8,25 +8,13 @@ import { persistRun } from "../persistence/run-store.ts";
 
 export interface BrowserRecorder {
   capture(input: BrowserRecordingInput): Promise<BrowserCapture>;
-  preflight?(input: BrowserPreflightInput): Promise<BrowserPreflightResult>;
-}
-
-export interface BrowserPreflightInput {
-  readonly inputSelector: string;
-  readonly submitSelector?: string;
-  readonly targetUrl: string;
-}
-
-export interface BrowserPreflightResult {
-  readonly authenticated: boolean;
-  readonly issues: readonly string[];
-  readonly pageUrl: string;
 }
 
 export interface BrowserRecordingInput {
   readonly captureTrace?: boolean;
   readonly expectedUserMessages: readonly string[];
   readonly interaction?: BrowserInteraction;
+  readonly isolateSession?: boolean;
   readonly targetUrl: string;
   readonly waitForCompletion: () => Promise<void>;
 }
@@ -43,6 +31,7 @@ export interface RecordResearchSessionInput {
   readonly captureTrace?: boolean;
   readonly caseId?: string;
   readonly interaction?: BrowserInteraction;
+  readonly isolateSession?: boolean;
   readonly outputRoot: string;
   readonly targetUrl: string;
   readonly userMessages: readonly string[];
@@ -73,6 +62,7 @@ export async function recordResearchSession(
       : { captureTrace: input.captureTrace }),
     expectedUserMessages: input.userMessages,
     ...(typeof input.interaction === "undefined" ? {} : { interaction: input.interaction }),
+    ...(input.isolateSession === true ? { isolateSession: true } : {}),
     targetUrl: input.targetUrl,
     waitForCompletion: input.waitForCompletion,
   });

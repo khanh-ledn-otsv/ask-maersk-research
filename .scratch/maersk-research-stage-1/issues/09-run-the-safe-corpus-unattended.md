@@ -4,7 +4,7 @@
 
 **Blocked by:** 08: Separate corpus capture from paid analysis.
 
-**Status:** complete
+**Status:** completed
 
 - [x] A preflight command checks the Ask Maersk URL, browser authentication state where required, input/submit/assistant/loading selectors, and required test-data placeholders without submitting a research prompt.
 - [x] `pnpm research corpus --all --capture-only` performs no terminal reads and completes every eligible case unattended.

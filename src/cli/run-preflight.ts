@@ -1,17 +1,19 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { loadResearchCases } from "../cases/load-research-cases.ts";
+import { loadApprovedTestData } from "../cases/load-approved-test-data.ts";
 import { prepareUnattendedCase } from "../cases/prepare-unattended-case.ts";
+import { createPreflightFingerprint } from "../cases/preflight-fingerprint.ts";
 import {
   RESEARCH_CATEGORIES,
   type ResearchCase,
   type ResearchCategory,
 } from "../domain/research-case.ts";
-import type { BrowserRecorder } from "../recording/record-research-session.ts";
+import type { BrowserPreflight } from "../browser/browser-preflight.ts";
 import { parseFlags } from "./parse-flags.ts";
 
 export interface PreflightCliDependencies {
-  readonly browser: BrowserRecorder;
+  readonly browserPreflight?: BrowserPreflight;
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly now: () => Date;
   readonly stdout: (message: string) => void;
@@ -27,17 +29,17 @@ export async function runPreflight(
     stderr(parsed.message);
     return 1;
   }
-  if (typeof dependencies.browser.preflight === "undefined") {
+  if (typeof dependencies.browserPreflight === "undefined") {
     stderr("Browser preflight is not configured.");
     return 1;
   }
   try {
     const [loadedCases, testData] = await Promise.all([
       loadResearchCases(parsed.options.casesDirectory),
-      loadTestData(parsed.options.testDataPath),
+      loadApprovedTestData(parsed.options.testDataPath),
     ]);
     const cases = selectCases(loadedCases, parsed.options.selection);
-    const browser = await dependencies.browser.preflight({
+    const browser = await dependencies.browserPreflight.preflight({
       inputSelector: parsed.options.inputSelector,
       ...(typeof parsed.options.submitSelector === "undefined"
         ? {}
@@ -72,6 +74,16 @@ export async function runPreflight(
       parsed.options.receiptPath,
       `${JSON.stringify({
         schemaVersion: 1,
+        browser,
+        configurationFingerprint: createPreflightFingerprint({
+          allowAuthorizedData: parsed.options.allowAuthorizedData,
+          cases: loadedCases,
+          inputSelector: parsed.options.inputSelector,
+          selection: parsed.options.selection,
+          ...(typeof parsed.options.submitSelector === "undefined" ? {} : { submitSelector: parsed.options.submitSelector }),
+          targetUrl: parsed.options.targetUrl,
+          testData,
+        }),
         passedAt: dependencies.now().toISOString(),
         targetUrl: browser.pageUrl,
         inputSelector: parsed.options.inputSelector,
@@ -166,19 +178,6 @@ function parseOptions(
       ...(typeof submitSelector === "undefined" ? {} : { submitSelector }),
     },
   };
-}
-
-async function loadTestData(path: string | undefined): Promise<Readonly<Record<string, string>>> {
-  if (typeof path === "undefined") return {};
-  const value = JSON.parse(await readFile(path, "utf8")) as unknown;
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`Approved test-data file must contain a JSON object: ${path}.`);
-  }
-  const entries = Object.entries(value);
-  if (entries.some(([, item]) => typeof item !== "string" || item.trim().length === 0)) {
-    throw new Error(`Approved test-data values must be non-empty strings: ${path}.`);
-  }
-  return Object.fromEntries(entries) as Readonly<Record<string, string>>;
 }
 
 function selectCases(cases: readonly ResearchCase[], selection: Selection): readonly ResearchCase[] {

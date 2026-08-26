@@ -130,9 +130,9 @@ pnpm research preflight --all
 pnpm research corpus --all --capture-only
 ```
 
-Preflight opens the configured page in headed mode, validates the URL, browser authentication state, input and optional submit controls, and assistant/loading selector syntax, but never fills or submits a prompt. It reports `preflight-ready` or an actionable `preflight-required` reason for every selected case and saves `.research/preflight.json` by default.
+Preflight opens the configured page in headed mode, validates the final URL, browser authentication state, input and optional submit controls, and assistant/loading selector matches, but never fills or submits a prompt. It reports `preflight-ready` or an actionable `preflight-required` reason for every selected case and saves `.research/preflight.json` by default.
 
-Capture-only summaries record `captured`, `capture-failed`, `skipped`, and `preflight-required` cases without analysis policy, token usage, or invented finding paths. Every eligible public or fake-data case runs without terminal input. Multi-turn messages for one case share its conversation; each separate case gets a fresh browser context. Cases that still declare manual setup remain visible as `preflight-required`. The CLI prints a concrete existing `research analyze` command for every captured case, but never runs one automatically.
+Capture-only summaries record `captured`, `capture-failed`, `skipped`, and `preflight-required` cases without analysis policy, token usage, or invented finding paths. Every eligible public or fake-data case runs without terminal input. Multi-turn messages for one case share its conversation; each separate case runs in an isolated clone of the configured browser profile so one case cannot leak browser conversation state into the next. Cases that still declare manual setup remain visible as `preflight-required`. The CLI prints a concrete existing `research analyze` command for every captured case, but never runs one automatically.
 
 Headless capture is deliberately a second step: first complete a matching headed preflight, then set `RESEARCH_HEADLESS=true` and run the capture command. A missing or mismatched receipt prevents Chromium from launching.
 

@@ -46,6 +46,51 @@ describe("Playwright browser recorder", () => {
     }
   });
 
+  test("isolates browser storage between separate corpus cases", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<!doctype html><html><body>
+        <form><input data-testid="question" /><button>Send</button></form><div id="answers"></div>
+        <script>
+          document.querySelector('form').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const visits = Number(localStorage.getItem('case-visits') || '0') + 1;
+            localStorage.setItem('case-visits', String(visits));
+            const answer = document.createElement('div');
+            answer.className = 'assistant';
+            answer.textContent = 'isolated-visit-' + visits;
+            document.querySelector('#answers').append(answer);
+          });
+        </script>
+      </body></html>`);
+    });
+    const port = await listen(server);
+    const userDataDirectory = await temporaryDirectories.create("maersk-isolation-profile-");
+    try {
+      const recorder = createPlaywrightBrowserRecorder({
+        assistantSelector: ".assistant",
+        headless: true,
+        responseTimeoutMs: 1_000,
+        userDataDirectory,
+      });
+      const capture = (message: string) => recorder.capture({
+        expectedUserMessages: [message],
+        interaction: { inputSelector: "[data-testid=question]", mode: "automated" },
+        isolateSession: true,
+        targetUrl: `http://127.0.0.1:${port}/`,
+        waitForCompletion: async () => undefined,
+      });
+
+      const first = await capture("first case");
+      const second = await capture("second case");
+      expect(first.conversation.at(-1)?.text).toBe("isolated-visit-1");
+      expect(second.conversation.at(-1)?.text).toBe("isolated-visit-1");
+    } finally {
+      await close(server);
+    }
+  }, 10_000);
+
+
   test("captures an ordered multi-turn journey with stages, screenshots, and interface offers", async () => {
     const server = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/html" });

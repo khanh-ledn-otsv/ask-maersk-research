@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -21,6 +21,7 @@ import type {
   TimingEvidence,
   TraceCapture,
 } from "../domain/evidence.ts";
+import type { BrowserPreflight } from "./browser-preflight.ts";
 import type {
   BrowserRecorder,
   BrowserRecordingInput,
@@ -125,7 +126,7 @@ type BodyParseResult =
 
 export function createPlaywrightBrowserRecorder(
   options: PlaywrightBrowserRecorderOptions,
-): BrowserRecorder {
+): BrowserRecorder & BrowserPreflight {
   const now = options.now ?? (() => new Date());
   const assistantSelector =
     options.assistantSelector ??
@@ -152,12 +153,15 @@ export function createPlaywrightBrowserRecorder(
         const page = context.pages()[0] ?? (await context.newPage());
         await page.goto(input.targetUrl, { waitUntil: "domcontentloaded" });
         const issues: string[] = [];
+        if (page.url() !== input.targetUrl) {
+          issues.push(`Ask Maersk URL redirected from "${input.targetUrl}" to "${page.url()}".`);
+        }
         await checkVisibleSelector(page, input.inputSelector, "Input", issues);
         if (typeof input.submitSelector !== "undefined") {
           await checkVisibleSelector(page, input.submitSelector, "Submit", issues);
         }
-        await checkSelectorSyntax(page, assistantSelector, "Assistant", issues);
-        await checkSelectorSyntax(
+        await checkSelectorMatch(page, assistantSelector, "Assistant", issues);
+        await checkSelectorMatch(
           page,
           options.loadingSelector ?? DEFAULT_LOADING_SELECTOR,
           "Loading",
@@ -191,14 +195,16 @@ async function checkVisibleSelector(
   }
 }
 
-async function checkSelectorSyntax(
+async function checkSelectorMatch(
   page: Page,
   selector: string,
   label: string,
   issues: string[],
 ): Promise<void> {
   try {
-    await page.locator(selector).count();
+    if ((await page.locator(selector).count()) === 0) {
+      issues.push(`${label} selector "${selector}" did not match an element.`);
+    }
   } catch (error: unknown) {
     issues.push(`${label} selector "${selector}" is invalid: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -218,10 +224,16 @@ async function captureWithPlaywright(
   input: BrowserRecordingInput,
   options: ResolvedOptions,
 ): Promise<BrowserCapture> {
-  const context = await chromium.launchPersistentContext(options.userDataDirectory, {
+  const isolatedProfile = input.isolateSession === true
+    ? await createIsolatedProfile(options.userDataDirectory)
+    : undefined;
+  const context = await chromium.launchPersistentContext(
+    isolatedProfile?.profilePath ?? options.userDataDirectory,
+    {
     headless: options.headless,
     viewport: { width: 1_440, height: 1_000 },
-  });
+    },
+  );
   let traceStarted = false;
   if (input.captureTrace === true) {
     await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
@@ -311,7 +323,24 @@ async function captureWithPlaywright(
   } finally {
     if (traceStarted) await context.tracing.stop().catch(() => undefined);
     await context.close();
+    if (typeof isolatedProfile !== "undefined") {
+      await rm(isolatedProfile.root, { force: true, recursive: true });
+    }
   }
+}
+
+async function createIsolatedProfile(
+  source: string,
+): Promise<{ readonly profilePath: string; readonly root: string }> {
+  const root = await mkdtemp(join(tmpdir(), "ask-maersk-profile-"));
+  const profilePath = join(root, "profile");
+  try {
+    await cp(source, profilePath, { recursive: true });
+  } catch (error: unknown) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
+    await mkdir(profilePath);
+  }
+  return { profilePath, root };
 }
 
 async function finishTrace(context: BrowserContext): Promise<TraceCapture> {

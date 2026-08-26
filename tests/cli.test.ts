@@ -28,7 +28,9 @@ describe("research CLI", () => {
         captureCalls += 1;
         throw new Error("preflight must not submit a research prompt");
       },
-      async preflight(input) {
+    };
+    const browserPreflight = {
+      async preflight(input: { inputSelector: string; targetUrl: string }) {
         expect(input).toMatchObject({
           inputSelector: "[data-testid=question]",
           targetUrl: "https://example.test/ask-maersk",
@@ -39,6 +41,7 @@ describe("research CLI", () => {
 
     const exitCode = await runCli(["preflight", "--all"], {
       browser,
+      browserPreflight,
       createRunId: () => "unused",
       environment: {
         ASK_MAERSK_INPUT_SELECTOR: "[data-testid=question]",
@@ -95,10 +98,10 @@ describe("research CLI", () => {
     const exitCode = await runCli(
       ["corpus", "--all", "--capture-only", "--allow-authorized-data", "--test-data", testDataPath],
       {
-        browser: {
-          ...createBrowser(async ({ expectedUserMessages }) => {
+        browser: createBrowser(async ({ expectedUserMessages }) => {
             mutableCaptures.push([...expectedUserMessages]);
           }),
+        browserPreflight: {
           async preflight(input) {
             return { authenticated: true, issues: [], pageUrl: input.targetUrl };
           },
@@ -148,10 +151,10 @@ describe("research CLI", () => {
       messages: [{ text: "Track {{APPROVED_SHIPMENT_ID}}" }],
     });
     const exitCode = await runCli(["corpus", "--all", "--capture-only", "--allow-authorized-data"], {
-      browser: {
-        ...createBrowser(async () => {
+      browser: createBrowser(async () => {
           throw new Error("failed preflight must prevent capture");
         }),
+      browserPreflight: {
         async preflight(input) {
           return { authenticated: false, issues: [], pageUrl: input.targetUrl };
         },
@@ -179,11 +182,17 @@ describe("research CLI", () => {
 
   test("headless corpus refuses to launch before a matching preflight succeeds", async () => {
     const errors: string[] = [];
+    const receiptDirectory = await temporaryDirectories.create("maersk-mismatched-preflight-");
+    const receiptPath = join(receiptDirectory, "preflight.json");
+    await writeFile(receiptPath, JSON.stringify({
+      configurationFingerprint: "a-different-selection",
+      cases: [{ caseId: "CAPABILITY-001", status: "preflight-ready" }],
+    }));
     const exitCode = await runCli(["corpus", "--all", "--capture-only"], {
-      browser: {
-        ...createBrowser(async () => {
+      browser: createBrowser(async () => {
           throw new Error("headless browser must not launch without preflight");
         }),
+      browserPreflight: {
         async preflight() {
           throw new Error("headless browser must not preflight without a headed receipt");
         },
@@ -193,7 +202,7 @@ describe("research CLI", () => {
         ASK_MAERSK_INPUT_SELECTOR: "[data-testid=question]",
         ASK_MAERSK_URL: "https://example.test/ask-maersk",
         RESEARCH_HEADLESS: "true",
-        RESEARCH_PREFLIGHT_RECEIPT: "/definitely/missing/preflight.json",
+        RESEARCH_PREFLIGHT_RECEIPT: receiptPath,
       },
       now: () => new Date("2026-08-26T14:00:00.000Z"),
       stderr: (message) => errors.push(message),
