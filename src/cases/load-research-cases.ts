@@ -17,6 +17,7 @@ const researchCaseSchema = z.strictObject({
   messages: z
     .array(z.strictObject({ text: nonEmptyText }))
     .min(1, "must contain at least one message"),
+  testDataPlaceholders: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/u)).min(1).optional(),
   captureTrace: z.boolean().default(false),
   notes: nonEmptyText.optional(),
 });
@@ -62,8 +63,12 @@ async function readResearchCase(path: string, filename: string): Promise<Researc
       .join("; ");
     throw new Error(`Invalid research case ${filename}: ${details}`);
   }
-  const { notes, ...required } = result.data;
-  return typeof notes === "undefined" ? required : { ...required, notes };
+  const { notes, testDataPlaceholders, ...required } = result.data;
+  return {
+    ...required,
+    ...(typeof testDataPlaceholders === "undefined" ? {} : { testDataPlaceholders }),
+    ...(typeof notes === "undefined" ? {} : { notes }),
+  };
 }
 
 function formatPath(path: readonly PropertyKey[]): string {

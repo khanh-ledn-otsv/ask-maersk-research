@@ -103,7 +103,7 @@ Each finding classifies the observed behavior, lists plausible API candidates, a
 
 ## Run the representative corpus
 
-The `cases/` directory contains 21 cases across capability, tracking, schedules, knowledge, conversational context, authentication, and guardrails. Each case declares whether it uses public, deliberately fake, or explicitly authorized test data. Cases involving fake or authorized shipment/customer data are manual-only and include handling instructions in their notes.
+The `cases/` directory contains 21 cases across capability, tracking, schedules, knowledge, conversational context, authentication, and guardrails. Each case declares whether it uses public, deliberately fake, or explicitly authorized test data. Public and deliberately fake cases that declare automated execution can run unattended. Authorized cases stay blocked unless their additional safeguards are satisfied.
 
 Run one case or a whole category and analyze each completed capture:
 
@@ -126,10 +126,30 @@ Resume creates another immutable summary, reuses completed case results, and ret
 To capture the complete corpus without an API key or any model cost, run:
 
 ```bash
+pnpm research preflight --all
 pnpm research corpus --all --capture-only
 ```
 
-Capture-only summaries use a separate schema that records `captured`, `capture-failed`, `skipped`, and `preflight-required` cases without analysis policy, token usage, or invented finding paths. Automated cases with configured selectors capture normally. Authorized-data manual cases are safely skipped; fake-data manual cases remain visible as requiring setup. Neither pauses the all-case run for terminal input. The CLI prints a concrete existing `research analyze` command for every captured case, but never runs one automatically.
+Preflight opens the configured page in headed mode, validates the URL, browser authentication state, input and optional submit controls, and assistant/loading selector syntax, but never fills or submits a prompt. It reports `preflight-ready` or an actionable `preflight-required` reason for every selected case and saves `.research/preflight.json` by default.
+
+Capture-only summaries record `captured`, `capture-failed`, `skipped`, and `preflight-required` cases without analysis policy, token usage, or invented finding paths. Every eligible public or fake-data case runs without terminal input. Multi-turn messages for one case share its conversation; each separate case gets a fresh browser context. Cases that still declare manual setup remain visible as `preflight-required`. The CLI prints a concrete existing `research analyze` command for every captured case, but never runs one automatically.
+
+Headless capture is deliberately a second step: first complete a matching headed preflight, then set `RESEARCH_HEADLESS=true` and run the capture command. A missing or mismatched receipt prevents Chromium from launching.
+
+Authorized-data automation needs both an explicit flag and a local JSON file containing every placeholder declared by the selected case:
+
+```json
+{
+  "APPROVED_SHIPMENT_ID": "value-from-the-approved-test-account"
+}
+```
+
+```bash
+pnpm research preflight --all --allow-authorized-data --test-data .research/approved-test-data.json
+pnpm research corpus --all --capture-only --allow-authorized-data --test-data .research/approved-test-data.json
+```
+
+Never place production customer identifiers in that file. Public and fake-data cases do not read configured test-data values.
 
 Resume capture into a new immutable summary with the same selection:
 

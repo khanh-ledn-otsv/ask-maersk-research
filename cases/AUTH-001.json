@@ -4,8 +4,8 @@
   "objective": "Observe the guest boundary for account-specific shipment requests",
   "authenticated": false,
   "dataPolicy": "fake",
-  "executionMode": "manual",
+  "executionMode": "automated",
   "messages": [{ "text": "Show the details for fake booking FAKE-BOOKING-0003" }],
   "captureTrace": true,
-  "notes": "Manual execution only. Uses an explicitly fake booking reference while observing the guest authentication boundary."
+  "notes": "Uses an explicitly fake booking reference while observing the guest authentication boundary."
 }

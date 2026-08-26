@@ -4,8 +4,9 @@
   "objective": "Observe an authenticated shipment lookup in an approved test account",
   "authenticated": true,
   "dataPolicy": "authorized",
-  "executionMode": "manual",
-  "messages": [{ "text": "Track the authorized test shipment supplied for this research session" }],
+  "executionMode": "automated",
+  "testDataPlaceholders": ["APPROVED_SHIPMENT_ID"],
+  "messages": [{ "text": "Track {{APPROVED_SHIPMENT_ID}}" }],
   "captureTrace": true,
-  "notes": "Manual execution only. Substitute only an explicitly authorized identifier from the approved test account; never use production customer data."
+  "notes": "Runs only with --allow-authorized-data and APPROVED_SHIPMENT_ID from the approved test account; never use production customer data."
 }

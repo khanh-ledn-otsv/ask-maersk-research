@@ -143,7 +143,65 @@ export function createPlaywrightBrowserRecorder(
         userDataDirectory: options.userDataDirectory,
       });
     },
+    async preflight(input) {
+      const context = await chromium.launchPersistentContext(options.userDataDirectory, {
+        headless: options.headless ?? false,
+        viewport: { width: 1_440, height: 1_000 },
+      });
+      try {
+        const page = context.pages()[0] ?? (await context.newPage());
+        await page.goto(input.targetUrl, { waitUntil: "domcontentloaded" });
+        const issues: string[] = [];
+        await checkVisibleSelector(page, input.inputSelector, "Input", issues);
+        if (typeof input.submitSelector !== "undefined") {
+          await checkVisibleSelector(page, input.submitSelector, "Submit", issues);
+        }
+        await checkSelectorSyntax(page, assistantSelector, "Assistant", issues);
+        await checkSelectorSyntax(
+          page,
+          options.loadingSelector ?? DEFAULT_LOADING_SELECTOR,
+          "Loading",
+          issues,
+        );
+        const loginWall = await hasVisibleMatch(
+          page.locator(
+            'input[type="password"], form[action*="login" i], [data-testid*="login" i], [data-testid*="signin" i]',
+          ),
+        );
+        return { authenticated: !loginWall, issues, pageUrl: page.url() };
+      } finally {
+        await context.close();
+      }
+    },
   };
+}
+
+async function checkVisibleSelector(
+  page: Page,
+  selector: string,
+  label: string,
+  issues: string[],
+): Promise<void> {
+  try {
+    if (!(await hasVisibleMatch(page.locator(selector)))) {
+      issues.push(`${label} selector "${selector}" did not match a visible element.`);
+    }
+  } catch (error: unknown) {
+    issues.push(`${label} selector "${selector}" is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function checkSelectorSyntax(
+  page: Page,
+  selector: string,
+  label: string,
+  issues: string[],
+): Promise<void> {
+  try {
+    await page.locator(selector).count();
+  } catch (error: unknown) {
+    issues.push(`${label} selector "${selector}" is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 interface ResolvedOptions {

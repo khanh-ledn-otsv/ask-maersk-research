@@ -92,7 +92,13 @@ describe("loadResearchCases", () => {
     const casesUsingControlledData = cases.filter(({ dataPolicy }) => dataPolicy !== "public");
     expect(casesUsingControlledData.length).toBeGreaterThan(0);
     expect(
-      casesUsingControlledData.every(({ executionMode }) => executionMode === "manual"),
+      cases.filter(({ dataPolicy }) => dataPolicy === "fake")
+        .every(({ executionMode }) => executionMode === "automated"),
+    ).toBe(true);
+    expect(
+      cases.filter(({ dataPolicy, executionMode }) =>
+        dataPolicy === "authorized" && executionMode === "automated"
+      ).every(({ testDataPlaceholders }) => (testDataPlaceholders?.length ?? 0) > 0),
     ).toBe(true);
     expect(
       casesUsingControlledData.every(({ notes }) =>

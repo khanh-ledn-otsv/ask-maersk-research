@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Analyzer } from "../analysis/analyze-evidence.ts";
 import { loadResearchCases } from "../cases/load-research-cases.ts";
+import { prepareUnattendedCase } from "../cases/prepare-unattended-case.ts";
 import { resolveCaseInteraction } from "../cases/resolve-case-interaction.ts";
 import { captureCorpusCase, executeCorpusCase } from "../corpus/execute-corpus-case.ts";
 import {
@@ -32,6 +33,7 @@ export interface CorpusCliDependencies {
 }
 
 interface CorpusOptionsBase {
+  readonly allowAuthorizedData: boolean;
   readonly casesDirectory: string;
   readonly evidenceOutputRoot: string;
   readonly inputSelector?: string;
@@ -40,6 +42,13 @@ interface CorpusOptionsBase {
   readonly submitSelector?: string;
   readonly summaryOutputRoot: string;
   readonly targetUrl: string;
+  readonly testDataPath?: string;
+}
+
+interface CapturePreflight {
+  readonly authenticated: boolean;
+  readonly browserIssues: readonly string[];
+  readonly testData: Readonly<Record<string, string>>;
 }
 
 type CorpusOptions = CorpusOptionsBase &
@@ -73,16 +82,34 @@ export async function runCorpus(
     stderr(parsed.message);
     return 1;
   }
-  const execution = createCorpusExecution(parsed.options, dependencies, stderr);
-  if (typeof execution === "undefined") return 1;
-
   try {
-    const [cases, resumeFrom] = await Promise.all([
+    if (parsed.options.mode === "capture-only" && dependencies.environment.RESEARCH_HEADLESS === "true") {
+      const receiptPath = dependencies.environment.RESEARCH_PREFLIGHT_RECEIPT ?? join(process.cwd(), ".research", "preflight.json");
+      if (!(await hasMatchingPreflightReceipt(receiptPath, parsed.options))) {
+        stderr("Headless capture requires a matching successful preflight. Run: pnpm research preflight --all");
+        return 1;
+      }
+    }
+    const [cases, resumeFrom, testData] = await Promise.all([
       loadResearchCases(parsed.options.casesDirectory),
       typeof parsed.options.resumePath === "undefined"
         ? Promise.resolve(undefined)
         : readCorpusSummary(parsed.options.resumePath),
+      loadTestData(parsed.options.testDataPath),
     ]);
+    const browserPreflight = parsed.options.mode === "capture-only" && typeof dependencies.browser.preflight !== "undefined"
+      ? await dependencies.browser.preflight({
+          inputSelector: parsed.options.inputSelector ?? "",
+          ...(typeof parsed.options.submitSelector === "undefined" ? {} : { submitSelector: parsed.options.submitSelector }),
+          targetUrl: parsed.options.targetUrl,
+        })
+      : undefined;
+    const execution = createCorpusExecution(parsed.options, dependencies, stderr, {
+      authenticated: browserPreflight?.authenticated ?? true,
+      browserIssues: browserPreflight?.issues ?? [],
+      testData,
+    });
+    if (typeof execution === "undefined") return 1;
     const result = await runResearchCorpus(
       {
         cases,
@@ -127,11 +154,12 @@ function createCorpusExecution(
   options: CorpusOptions,
   dependencies: CorpusCliDependencies,
   stderr: (message: string) => void,
+  preflight: CapturePreflight,
 ): CorpusExecution | undefined {
   if (options.mode === "capture-only") {
     return {
       mode: "capture-only",
-      executeCase: (case_) => executeSelectedCaptureCase(case_, options, dependencies),
+      executeCase: (case_) => executeSelectedCaptureCase(case_, options, dependencies, preflight),
     };
   }
   const apiKey = dependencies.environment.OPEN_AI_API_KEY;
@@ -156,30 +184,26 @@ async function executeSelectedCaptureCase(
   case_: ResearchCase,
   options: Extract<CorpusOptions, { mode: "capture-only" }>,
   dependencies: CorpusCliDependencies,
+  preflight: CapturePreflight,
 ): Promise<CorpusCaseExecution> {
-  if (case_.executionMode === "manual") {
-    if (case_.dataPolicy === "authorized") {
-      return {
-        status: "skipped",
-        reason: "Authorized-data case safely skipped until approved test data is configured.",
-      };
-    }
+  const prepared = prepareUnattendedCase(case_, {
+    allowAuthorizedData: options.allowAuthorizedData,
+    authenticated: preflight.authenticated,
+    browserIssues: preflight.browserIssues,
+    ...(typeof options.inputSelector === "undefined" ? {} : { inputSelector: options.inputSelector }),
+    ...(typeof options.submitSelector === "undefined" ? {} : { submitSelector: options.submitSelector }),
+    testData: preflight.testData,
+  });
+  if (!prepared.ok) {
     return {
       status: "preflight-required",
-      reason: "Manual case requires fake test data and researcher setup before capture.",
-    };
-  }
-  const interaction = resolveCaseInteraction(case_, options);
-  if (typeof interaction === "undefined") {
-    return {
-      status: "preflight-required",
-      reason: "Automated case requires ASK_MAERSK_INPUT_SELECTOR before capture.",
+      reason: prepared.reason,
     };
   }
   dependencies.stdout(`Running ${case_.id}: ${case_.objective}`);
   return captureCorpusCase(
-    case_,
-    executionOptions(interaction, options, dependencies),
+    prepared.case,
+    executionOptions(prepared.interaction, options, dependencies),
     executionDependencies(dependencies),
   );
 }
@@ -190,6 +214,12 @@ async function executeSelectedAnalyzedCase(
   analyzer: Analyzer,
   dependencies: CorpusCliDependencies,
 ): Promise<CorpusCaseExecution> {
+  if (case_.executionMode === "automated" && case_.dataPolicy === "authorized") {
+    return {
+      status: "skipped",
+      reason: "Authorized-data automation must be captured first with --capture-only, --allow-authorized-data, and approved test data.",
+    };
+  }
   const interaction = resolveCaseInteraction(case_, options);
   if (typeof interaction === "undefined") {
     return {
@@ -238,6 +268,7 @@ function parseCorpusOptions(
 ): CorpusOptionsResult {
   const parsedFlags = parseFlags(arguments_, {
     "--all": "boolean",
+    "--allow-authorized-data": "boolean",
     "--case": "value",
     "--cases": "value",
     "--capture-only": "boolean",
@@ -248,6 +279,7 @@ function parseCorpusOptions(
     "--reasoning-effort": "value",
     "--resume": "value",
     "--submit-selector": "value",
+    "--test-data": "value",
     "--summary-output": "value",
     "--url": "value",
   });
@@ -297,7 +329,9 @@ function parseCorpusOptions(
   const submitSelector =
     parsedFlags.values.get("--submit-selector") ?? environment.ASK_MAERSK_SUBMIT_SELECTOR;
   const resumePath = parsedFlags.values.get("--resume");
+  const testDataPath = parsedFlags.values.get("--test-data") ?? environment.RESEARCH_TEST_DATA_FILE;
   const commonOptions: CorpusOptionsBase = {
+    allowAuthorizedData: parsedFlags.values.has("--allow-authorized-data"),
     casesDirectory:
       parsedFlags.values.get("--cases") ??
       environment.RESEARCH_CASES_DIR ??
@@ -312,6 +346,7 @@ function parseCorpusOptions(
       environment.RESEARCH_CORPUS_OUTPUT_DIR ??
       join(process.cwd(), "data", "corpus-runs"),
     targetUrl: parsedUrl.toString(),
+    ...(typeof testDataPath === "undefined" ? {} : { testDataPath }),
     ...(typeof inputSelector === "undefined" ? {} : { inputSelector }),
     ...(typeof submitSelector === "undefined" ? {} : { submitSelector }),
     ...(typeof resumePath === "undefined" ? {} : { resumePath }),
@@ -329,6 +364,35 @@ function parseCorpusOptions(
       mode: "analyzed",
     },
   };
+}
+
+async function loadTestData(path: string | undefined): Promise<Readonly<Record<string, string>>> {
+  if (typeof path === "undefined") return {};
+  const value = JSON.parse(await readFile(path, "utf8")) as unknown;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`Approved test-data file must contain a JSON object: ${path}.`);
+  }
+  const entries = Object.entries(value);
+  if (entries.some(([, item]) => typeof item !== "string" || item.trim().length === 0)) {
+    throw new Error(`Approved test-data values must be non-empty strings: ${path}.`);
+  }
+  return Object.fromEntries(entries) as Readonly<Record<string, string>>;
+}
+
+async function hasMatchingPreflightReceipt(path: string, options: CorpusOptionsBase): Promise<boolean> {
+  try {
+    const value = JSON.parse(await readFile(path, "utf8")) as {
+      cases?: { status?: unknown }[];
+      inputSelector?: unknown;
+      targetUrl?: unknown;
+    };
+    return value.targetUrl === options.targetUrl &&
+      value.inputSelector === options.inputSelector &&
+      Array.isArray(value.cases) &&
+      value.cases.some(({ status }) => status === "preflight-ready");
+  } catch {
+    return false;
+  }
 }
 
 function isResearchCategory(value: string): value is ResearchCategory {

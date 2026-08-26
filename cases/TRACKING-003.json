@@ -4,11 +4,11 @@
   "objective": "Observe a multi-turn correction from one fake identifier type to another",
   "authenticated": false,
   "dataPolicy": "fake",
-  "executionMode": "manual",
+  "executionMode": "automated",
   "messages": [
     { "text": "Track container FAKE-CONTAINER-0001" },
     { "text": "Use fake booking reference FAKE-BOOKING-0002 instead" }
   ],
   "captureTrace": true,
-  "notes": "Manual execution only. Both identifiers are explicitly fake and must never be replaced with customer data."
+  "notes": "Both identifiers are explicitly fake and must never be replaced with customer data."
 }

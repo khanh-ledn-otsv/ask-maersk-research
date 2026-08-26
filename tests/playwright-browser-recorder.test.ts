@@ -11,6 +11,41 @@ const temporaryDirectories = createTemporaryDirectoryTracker();
 afterEach(() => temporaryDirectories.cleanup());
 
 describe("Playwright browser recorder", () => {
+  test("preflight checks the page and selectors without submitting the form", async () => {
+    let submissions = 0;
+    const server = createServer((request, response) => {
+      if (request.method === "POST") submissions += 1;
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<!doctype html><html><body>
+        <form method="post"><input data-testid="question" /><button data-testid="send">Send</button></form>
+        <main data-message-author-role="assistant"></main><div role="progressbar" hidden></div>
+      </body></html>`);
+    });
+    const port = await listen(server);
+    const userDataDirectory = await temporaryDirectories.create("maersk-preflight-profile-");
+    try {
+      const recorder = createPlaywrightBrowserRecorder({
+        assistantSelector: '[data-message-author-role="assistant"]',
+        headless: true,
+        loadingSelector: '[role="progressbar"]',
+        userDataDirectory,
+      });
+      const result = await recorder.preflight?.({
+        inputSelector: "[data-testid=question]",
+        submitSelector: "[data-testid=missing]",
+        targetUrl: `http://127.0.0.1:${port}/`,
+      });
+
+      expect(result).toMatchObject({
+        authenticated: true,
+        issues: ['Submit selector "[data-testid=missing]" did not match a visible element.'],
+      });
+      expect(submissions).toBe(0);
+    } finally {
+      await close(server);
+    }
+  });
+
   test("captures an ordered multi-turn journey with stages, screenshots, and interface offers", async () => {
     const server = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/html" });

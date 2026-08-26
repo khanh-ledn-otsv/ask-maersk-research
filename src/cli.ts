@@ -16,7 +16,7 @@ const assistantSelector = process.env.ASK_MAERSK_ASSISTANT_SELECTOR;
 const loadingSelector = process.env.ASK_MAERSK_LOADING_SELECTOR;
 const browser = createPlaywrightBrowserRecorder({
   userDataDirectory,
-  headless: process.env.RESEARCH_HEADLESS === "true",
+  headless: process.argv[2] !== "preflight" && process.env.RESEARCH_HEADLESS === "true",
   ...(typeof assistantSelector === "undefined" ? {} : { assistantSelector }),
   ...(typeof loadingSelector === "undefined" ? {} : { loadingSelector }),
 });

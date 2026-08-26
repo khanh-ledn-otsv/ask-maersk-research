@@ -9,6 +9,7 @@ import {
 import { runAnalysis, type AnalysisCliDependencies } from "./analyze-run.ts";
 import { parseFlags } from "./parse-flags.ts";
 import { runCorpus, type CorpusCliDependencies } from "./run-corpus.ts";
+import { runPreflight } from "./run-preflight.ts";
 import { runReport } from "./run-report.ts";
 
 export interface CliDependencies extends AnalysisCliDependencies, CorpusCliDependencies {
@@ -51,6 +52,7 @@ export async function runCli(
 
   if (command === "analyze") return runAnalysis(options, dependencies, stderr);
   if (command === "corpus") return runCorpus(options, dependencies, stderr);
+  if (command === "preflight") return runPreflight(options, dependencies, stderr);
   if (command === "report") return runReport(options, dependencies, stderr);
   if (command === "run") return runDeclaredCase(options, dependencies, stderr);
   if (command !== "record") return reportUsage(stderr);
@@ -147,6 +149,9 @@ function resolveInteraction(
   case_: ResearchCase,
   options: RunOptions,
 ): NonNullable<Parameters<typeof recordResearchSession>[0]["interaction"]> | string {
+  if (case_.executionMode === "automated" && case_.dataPolicy === "authorized") {
+    return "Authorized-data automation is available only through capture-only corpus execution with --allow-authorized-data and --test-data <path>.";
+  }
   const interaction = resolveCaseInteraction(case_, options);
   if (typeof interaction === "undefined") {
     return "Automated cases require ASK_MAERSK_INPUT_SELECTOR or --input-selector <selector>.";
@@ -241,7 +246,7 @@ function resolveCommonOptions(
 
 function reportUsage(stderr: (message: string) => void): 1 {
   stderr(
-    "Usage: pnpm research <record [options] | run <case-id> [options] | analyze <run-directory> [options] | corpus <--all --capture-only | --case id | --category category> [options] | report <corpus-summary> [options]>",
+    "Usage: pnpm research <record [options] | run <case-id> [options] | preflight <--all | --case id | --category category> [options] | analyze <run-directory> [options] | corpus <--all --capture-only | --case id | --category category> [options] | report <corpus-summary> [options]>",
   );
   return 1;
 }

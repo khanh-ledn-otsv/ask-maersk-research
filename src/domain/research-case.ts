@@ -24,6 +24,7 @@ export interface ResearchCase {
   readonly dataPolicy: ResearchDataPolicy;
   readonly executionMode: ResearchExecutionMode;
   readonly messages: readonly ResearchMessage[];
+  readonly testDataPlaceholders?: readonly string[];
   readonly captureTrace: boolean;
   readonly notes?: string;
 }

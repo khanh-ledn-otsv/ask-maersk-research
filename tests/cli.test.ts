@@ -11,6 +11,202 @@ const temporaryDirectories = createTemporaryDirectoryTracker();
 afterEach(() => temporaryDirectories.cleanup());
 
 describe("research CLI", () => {
+  test("preflight validates the selected cases without submitting a prompt", async () => {
+    const casesDirectory = await temporaryDirectories.create("maersk-preflight-cases-");
+    const receiptPath = join(casesDirectory, "preflight.json");
+    await writeResearchCase(casesDirectory, {
+      id: "CAPABILITY-001",
+      category: "CAPABILITY",
+      objective: "Observe the opening capability answer",
+      executionMode: "automated",
+      messages: [{ text: "What can you help me with?" }],
+    });
+    let captureCalls = 0;
+    const output: string[] = [];
+    const browser: BrowserRecorder = {
+      async capture() {
+        captureCalls += 1;
+        throw new Error("preflight must not submit a research prompt");
+      },
+      async preflight(input) {
+        expect(input).toMatchObject({
+          inputSelector: "[data-testid=question]",
+          targetUrl: "https://example.test/ask-maersk",
+        });
+        return { authenticated: false, issues: [], pageUrl: input.targetUrl };
+      },
+    };
+
+    const exitCode = await runCli(["preflight", "--all"], {
+      browser,
+      createRunId: () => "unused",
+      environment: {
+        ASK_MAERSK_INPUT_SELECTOR: "[data-testid=question]",
+        ASK_MAERSK_URL: "https://example.test/ask-maersk",
+        RESEARCH_CASES_DIR: casesDirectory,
+        RESEARCH_PREFLIGHT_RECEIPT: receiptPath,
+      },
+      now: () => new Date("2026-08-26T11:00:00.000Z"),
+      stdout: (message) => output.push(message),
+      waitForCompletion: async () => {
+        throw new Error("preflight must not read the terminal");
+      },
+    });
+
+    expect(exitCode).toBe(0);
+    expect(captureCalls).toBe(0);
+    expect(output).toContain("CAPABILITY-001: preflight-ready");
+    expect(JSON.parse(await readFile(receiptPath, "utf8"))).toMatchObject({
+      passedAt: "2026-08-26T11:00:00.000Z",
+      targetUrl: "https://example.test/ask-maersk",
+    });
+  });
+
+  test("capture-only isolates unattended cases and gates authorized placeholders", async () => {
+    const casesDirectory = await temporaryDirectories.create("maersk-unattended-cases-");
+    const outputRoot = await temporaryDirectories.create("maersk-unattended-evidence-");
+    const summaryRoot = await temporaryDirectories.create("maersk-unattended-summaries-");
+    const testDataDirectory = await temporaryDirectories.create("maersk-approved-data-");
+    const testDataPath = join(testDataDirectory, "approved.json");
+    await Promise.all([
+      writeResearchCase(casesDirectory, {
+        id: "TRACK-FAKE",
+        category: "TRACKING",
+        objective: "Exercise a fake multi-turn correction",
+        dataPolicy: "fake",
+        executionMode: "automated",
+        messages: [{ text: "Track FAKE-0001" }, { text: "Use FAKE-0002 instead" }],
+      }),
+      writeResearchCase(casesDirectory, {
+        id: "TRACK-AUTHORIZED",
+        category: "TRACKING",
+        objective: "Exercise an approved test shipment",
+        authenticated: true,
+        dataPolicy: "authorized",
+        executionMode: "automated",
+        testDataPlaceholders: ["APPROVED_SHIPMENT_ID"],
+        messages: [{ text: "Track {{APPROVED_SHIPMENT_ID}}" }],
+      }),
+      writeFile(testDataPath, JSON.stringify({ APPROVED_SHIPMENT_ID: "APPROVED-TEST-42" })),
+    ]);
+    const captures: readonly string[][] = [];
+    const mutableCaptures = captures as string[][];
+    let runId = 0;
+    const exitCode = await runCli(
+      ["corpus", "--all", "--capture-only", "--allow-authorized-data", "--test-data", testDataPath],
+      {
+        browser: {
+          ...createBrowser(async ({ expectedUserMessages }) => {
+            mutableCaptures.push([...expectedUserMessages]);
+          }),
+          async preflight(input) {
+            return { authenticated: true, issues: [], pageUrl: input.targetUrl };
+          },
+        },
+        createCorpusRunId: () => "unattended",
+        createRunId: () => `isolated-${++runId}`,
+        environment: {
+          ASK_MAERSK_INPUT_SELECTOR: "[data-testid=question]",
+          ASK_MAERSK_URL: "https://example.test/ask-maersk",
+          RESEARCH_CASES_DIR: casesDirectory,
+          RESEARCH_CORPUS_OUTPUT_DIR: summaryRoot,
+          RESEARCH_OUTPUT_DIR: outputRoot,
+        },
+        now: () => new Date("2026-08-26T12:00:00.000Z"),
+        stdout: () => undefined,
+        waitForCompletion: async () => {
+          throw new Error("unattended capture must not read the terminal");
+        },
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(captures).toEqual([
+      ["Track APPROVED-TEST-42"],
+      ["Track FAKE-0001", "Use FAKE-0002 instead"],
+    ]);
+    const summary = JSON.parse(
+      await readFile(join(summaryRoot, "2026-08-26_120000_unattended", "summary.json"), "utf8"),
+    ) as { cases: { caseId: string; status: string }[] };
+    expect(summary.cases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ caseId: "TRACK-AUTHORIZED", status: "captured" }),
+      expect.objectContaining({ caseId: "TRACK-FAKE", status: "captured" }),
+    ]));
+  });
+
+  test("capture-only reports auth and approved-data preflight requirements per case", async () => {
+    const casesDirectory = await temporaryDirectories.create("maersk-required-cases-");
+    const summaryRoot = await temporaryDirectories.create("maersk-required-summaries-");
+    await writeResearchCase(casesDirectory, {
+      id: "AUTH-TEST",
+      category: "AUTH",
+      objective: "Exercise authenticated lookup",
+      authenticated: true,
+      dataPolicy: "authorized",
+      executionMode: "automated",
+      testDataPlaceholders: ["APPROVED_SHIPMENT_ID"],
+      messages: [{ text: "Track {{APPROVED_SHIPMENT_ID}}" }],
+    });
+    const exitCode = await runCli(["corpus", "--all", "--capture-only", "--allow-authorized-data"], {
+      browser: {
+        ...createBrowser(async () => {
+          throw new Error("failed preflight must prevent capture");
+        }),
+        async preflight(input) {
+          return { authenticated: false, issues: [], pageUrl: input.targetUrl };
+        },
+      },
+      createCorpusRunId: () => "required",
+      createRunId: () => "unused",
+      environment: {
+        ASK_MAERSK_INPUT_SELECTOR: "[data-testid=question]",
+        ASK_MAERSK_URL: "https://example.test/ask-maersk",
+        RESEARCH_CASES_DIR: casesDirectory,
+        RESEARCH_CORPUS_OUTPUT_DIR: summaryRoot,
+      },
+      now: () => new Date("2026-08-26T13:00:00.000Z"),
+      stdout: () => undefined,
+      waitForCompletion: async () => undefined,
+    });
+
+    expect(exitCode).toBe(0);
+    const summary = JSON.parse(
+      await readFile(join(summaryRoot, "2026-08-26_130000_required", "summary.json"), "utf8"),
+    ) as { cases: { reason?: string; status: string }[] };
+    expect(summary.cases[0]).toMatchObject({ status: "preflight-required" });
+    expect(summary.cases[0]?.reason).toMatch(/authenticated browser session.*APPROVED_SHIPMENT_ID/iu);
+  });
+
+  test("headless corpus refuses to launch before a matching preflight succeeds", async () => {
+    const errors: string[] = [];
+    const exitCode = await runCli(["corpus", "--all", "--capture-only"], {
+      browser: {
+        ...createBrowser(async () => {
+          throw new Error("headless browser must not launch without preflight");
+        }),
+        async preflight() {
+          throw new Error("headless browser must not preflight without a headed receipt");
+        },
+      },
+      createRunId: () => "unused",
+      environment: {
+        ASK_MAERSK_INPUT_SELECTOR: "[data-testid=question]",
+        ASK_MAERSK_URL: "https://example.test/ask-maersk",
+        RESEARCH_HEADLESS: "true",
+        RESEARCH_PREFLIGHT_RECEIPT: "/definitely/missing/preflight.json",
+      },
+      now: () => new Date("2026-08-26T14:00:00.000Z"),
+      stderr: (message) => errors.push(message),
+      stdout: () => undefined,
+      waitForCompletion: async () => undefined,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(errors).toEqual([
+      "Headless capture requires a matching successful preflight. Run: pnpm research preflight --all",
+    ]);
+  });
+
   test("record creates evidence from environment configuration without an AI key", async () => {
     const outputRoot = await temporaryDirectories.create("maersk-research-cli-");
     const output: string[] = [];
@@ -592,15 +788,13 @@ describe("research CLI", () => {
     expect(summary.aggregateUsage).toBeUndefined();
     expect(summary.cases).toHaveLength(21);
     expect(summary.cases.some(({ status }) => status === "captured")).toBe(true);
-    expect(summary.cases.some(({ status }) => status === "skipped")).toBe(true);
     expect(summary.cases.some(({ status }) => status === "preflight-required")).toBe(true);
     expect(summary.cases.every(({ findingPath }) => typeof findingPath === "undefined")).toBe(true);
     expect(summary.cases[0]?.caseId).toBe("AUTH-001");
     expect(summary.cases.at(-1)?.caseId).toBe("TRACKING-003");
     expect(output).toContain(`Corpus summary saved: ${summaryPath}`);
-    expect(output).toContain(
-      `Next paid step (CAPABILITY-001): pnpm research analyze ${join(outputRoot, "2026-08-26_090000_capture-1")}`,
-    );
+    expect(output.find((message) => message.startsWith("Next paid step (CAPABILITY-001):")))
+      .toMatch(/^Next paid step \(CAPABILITY-001\): pnpm research analyze .*capture-\d+$/u);
   });
 
   test("capture-only resume preserves captured evidence and retries capture failures", async () => {
