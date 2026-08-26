@@ -90,6 +90,39 @@ describe("research report CLI", () => {
     expect(report).not.toContain("Ask Maersk requests a shipment identifier.");
   });
 
+  test("does not emit a dead citation when one referenced screenshot is missing", async () => {
+    const fixture = await writeCorpusFixture({ missingScreenshot: true });
+    const reportPath = join(fixture.root, "reports", "missing-screenshot.md");
+
+    expect(
+      await runCli(
+        ["report", fixture.summaryPath, "--output", reportPath],
+        cliDependencies([]),
+      ),
+    ).toBe(0);
+
+    const report = await readFile(reportPath, "utf8");
+    expect(report).toContain("Ask Maersk requests a shipment identifier.");
+    expect(report).toContain("conversation turn 1");
+    expect(report).not.toContain("02-result.png");
+  });
+
+  test("states strengths as bounded interaction qualities rather than answer quality", async () => {
+    const fixture = await writeCorpusFixture({ classification: "direct-answer" });
+    const reportPath = join(fixture.root, "reports", "strengths.md");
+
+    expect(
+      await runCli(
+        ["report", fixture.summaryPath, "--output", reportPath],
+        cliDependencies([]),
+      ),
+    ).toBe(0);
+
+    const report = await readFile(reportPath, "utf8");
+    expect(report).toContain("**Interaction efficiency — TRACK-001:**");
+    expect(report).toContain("does not establish answer correctness");
+  });
+
   test("keeps completed findings useful while exposing partial-run gaps", async () => {
     const fixture = await writeCorpusFixture();
     const summary = JSON.parse(await readFile(fixture.summaryPath, "utf8")) as {
@@ -213,7 +246,12 @@ describe("research report CLI", () => {
 });
 
 async function writeCorpusFixture(
-  options: { readonly missingEvidence?: boolean; readonly observation?: string } = {},
+  options: {
+    readonly classification?: "clarification" | "direct-answer";
+    readonly missingEvidence?: boolean;
+    readonly missingScreenshot?: boolean;
+    readonly observation?: string;
+  } = {},
 ): Promise<{ evidencePath: string; root: string; summaryPath: string }> {
   const root = await temporaryDirectories.create("maersk-report-");
   const caseDirectory = join(root, "runs", "TRACK-001");
@@ -263,7 +301,7 @@ async function writeCorpusFixture(
     schemaVersion: 1,
     sourceRunId: evidence.runId,
     behavior: {
-      classification: "clarification",
+      classification: options.classification ?? "clarification",
       claim: options.observation ?? "Ask Maersk requests a shipment identifier.",
       evidenceReferences: [
         { kind: "conversation", locator: "1" },
@@ -319,7 +357,9 @@ async function writeCorpusFixture(
       : [writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`)]),
     writeFile(findingPath, `${JSON.stringify(finding, null, 2)}\n`),
     writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`),
-    writeFile(join(caseDirectory, "screenshots", "02-result.png"), "screenshot"),
+    ...(options.missingScreenshot === true
+      ? []
+      : [writeFile(join(caseDirectory, "screenshots", "02-result.png"), "screenshot")]),
   ]);
   return { evidencePath, root, summaryPath };
 }

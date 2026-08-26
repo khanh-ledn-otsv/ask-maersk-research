@@ -44,21 +44,15 @@ export function renderResearchReport(
     "",
     "## Strengths and Weaknesses",
     "",
-    "These are interaction signals, not correctness judgements; answer quality requires separate evaluation.",
+    "Strength and weakness labels are limited to observable interaction mechanics; they do not assess factual correctness or business outcome.",
     "",
     "### Strengths",
     "",
-    ...renderBehaviorGroup(data.available, outputPath, [
-      "direct-answer",
-      "guided-action",
-    ]),
+    ...renderStrengths(data.available, outputPath),
     "",
     "### Weaknesses",
     "",
-    ...renderBehaviorGroup(data.available, outputPath, [
-      "failure",
-      "unknown",
-    ]),
+    ...renderWeaknesses(data.available, outputPath),
     "",
     "### Context-dependent Patterns",
     "",
@@ -66,6 +60,7 @@ export function renderResearchReport(
       "clarification",
       "handoff",
       "refusal",
+      "unknown",
     ]),
     "",
     "## Ask ONE Implications",
@@ -202,6 +197,38 @@ function renderBehaviorGroup(
   return matching.length === 0
     ? ["No cited observation in the available cases falls into this group."]
     : matching;
+}
+
+function renderStrengths(cases: readonly LoadedCase[], outputPath: string): string[] {
+  const strengths = cases
+    .filter(hasSupportedBehavior)
+    .flatMap((case_) => {
+      const classification = case_.finding.behavior.classification;
+      const dimension = classification === "direct-answer"
+        ? "Interaction efficiency"
+        : classification === "guided-action"
+          ? "Interaction guidance"
+          : undefined;
+      if (typeof dimension === "undefined") return [];
+      return [
+        `- **${dimension} — ${escapeMarkdown(case_.result.caseId)}:** ${escapeMarkdown(case_.finding.behavior.claim)} This establishes the observed interaction pattern; it does not establish answer correctness. ${renderReferences(case_, case_.finding.behavior.evidenceReferences, outputPath)}`,
+      ];
+    });
+  return strengths.length === 0
+    ? ["No interaction strength is supported by the available behavior classifications."]
+    : strengths;
+}
+
+function renderWeaknesses(cases: readonly LoadedCase[], outputPath: string): string[] {
+  const weaknesses = cases
+    .filter(({ finding }) => finding.behavior.classification === "failure")
+    .filter(hasSupportedBehavior)
+    .map((case_) =>
+      `- **Interaction reliability — ${escapeMarkdown(case_.result.caseId)}:** ${escapeMarkdown(case_.finding.behavior.claim)} ${renderReferences(case_, case_.finding.behavior.evidenceReferences, outputPath)}`,
+    );
+  return weaknesses.length === 0
+    ? ["No interaction weakness is supported by an observed failure in the available cases."]
+    : weaknesses;
 }
 
 function renderImplications(cases: readonly LoadedCase[], outputPath: string): string[] {
@@ -364,7 +391,7 @@ function referencesSupported(
   case_: LoadedCase,
   references: readonly EvidenceReference[],
 ): boolean {
-  return references.length > 0 && references.every((reference) =>
+  return references.some((reference) =>
     case_.supportedReferences.has(referenceKey(reference))
   );
 }

@@ -53,16 +53,17 @@ export async function loadReportData(summaryPath: string): Promise<LoadedReportD
       ]);
       assertEvidence(evidence);
       assertFinding(finding);
+      const availableScreenshotPaths = await collectAvailableScreenshotPaths(
+        evidence,
+        evidencePath,
+      );
       available.push({
         result,
         evidence,
         evidencePath,
         finding,
-        availableScreenshotPaths: await collectAvailableScreenshotPaths(
-          evidence,
-          evidencePath,
-        ),
-        supportedReferences: collectSupportedReferences(evidence),
+        availableScreenshotPaths,
+        supportedReferences: collectSupportedReferences(evidence, availableScreenshotPaths),
       });
     } catch (error: unknown) {
       unavailable.push({
@@ -78,14 +79,19 @@ export function referenceKey(reference: EvidenceReference): ReferenceKey {
   return `${reference.kind}:${reference.locator}` as ReferenceKey;
 }
 
-function collectSupportedReferences(evidence: CaseEvidence): ReadonlySet<ReferenceKey> {
+function collectSupportedReferences(
+  evidence: CaseEvidence,
+  availableScreenshotPaths: ReadonlySet<string>,
+): ReadonlySet<ReferenceKey> {
   const references: EvidenceReference[] = [
     { kind: "page", locator: "page" },
     ...evidence.conversation.map(({ index }) => ({
       kind: "conversation" as const,
       locator: String(index),
     })),
-    ...evidence.screenshots.map(({ path }) => ({ kind: "screenshot" as const, locator: path })),
+    ...evidence.screenshots
+      .filter(({ path }) => availableScreenshotPaths.has(path))
+      .map(({ path }) => ({ kind: "screenshot" as const, locator: path })),
     ...evidence.network.map(({ id }) => ({ kind: "network" as const, locator: id })),
     ...evidence.timings.map(({ turnIndex }) => ({
       kind: "timing" as const,
