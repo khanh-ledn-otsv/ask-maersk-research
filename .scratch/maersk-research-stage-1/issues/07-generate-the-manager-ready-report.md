@@ -15,4 +15,4 @@
 
 ## Comments
 
-- 2026-08-26: Added the offline `research report` CLI workflow, deterministic manager-ready Markdown synthesis, evidence-linked matrices and highlights, uncertainty handling, actual model/token-cost reporting, and partial-run degradation. Typecheck and all 48 tests pass.
+- 2026-08-26: Added the offline `research report` CLI workflow, deterministic manager-ready Markdown synthesis, evidence-linked matrices and ranked highlights, uncertainty handling, actual model/token-cost reporting, and partial-run degradation. The final review separated loading, rendering, and writing; typecheck and all 50 tests pass.

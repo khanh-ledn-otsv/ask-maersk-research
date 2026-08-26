@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { generateResearchReport } from "../report/generate-research-report.ts";
+import { writeResearchReport } from "../report/write-research-report.ts";
 import { parseFlags } from "./parse-flags.ts";
 
 export interface ReportCliDependencies {
@@ -27,7 +27,7 @@ export async function runReport(
     dependencies.environment.RESEARCH_REPORT_PATH ??
     join(process.cwd(), "reports", "maersk-research.md");
   try {
-    const result = await generateResearchReport({ outputPath, summaryPath });
+    const result = await writeResearchReport({ outputPath, summaryPath });
     dependencies.stdout(`Research report saved: ${result.outputPath}`);
     return 0;
   } catch (error: unknown) {

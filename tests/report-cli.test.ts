@@ -44,6 +44,12 @@ describe("research report CLI", () => {
     expect(report).toContain("`gpt-5.4-mini-2026-03-17` (1 case)");
     expect(report).toContain("### Screenshots");
     expect(report).toContain("TRACK-001: Ask Maersk requests a shipment identifier.");
+    const strengths = report.slice(
+      report.indexOf("### Strengths"),
+      report.indexOf("### Weaknesses"),
+    );
+    expect(strengths).not.toContain("Ask Maersk requests a shipment identifier.");
+    expect(report).toContain("### Context-dependent Patterns");
   });
 
   test("escapes captured Markdown and table delimiters", async () => {
@@ -127,11 +133,88 @@ describe("research report CLI", () => {
     expect(report).toContain("**TRACK-002:** failed: capture timed out");
     expect(report).toContain("**TRACK-003:** skipped: selector unavailable");
   });
+
+  test("keeps the decisive final turns of a long representative journey", async () => {
+    const fixture = await writeCorpusFixture();
+    const evidence = JSON.parse(await readFile(fixture.evidencePath, "utf8")) as {
+      conversation: Record<string, unknown>[];
+    };
+    evidence.conversation = [
+      ...evidence.conversation,
+      { index: 2, role: "user", text: "Use ABC123", timestamp: "2026-08-26T08:00:02.000Z" },
+      { index: 3, role: "assistant", text: "Which carrier?", timestamp: "2026-08-26T08:00:03.000Z" },
+      { index: 4, role: "user", text: "Maersk", timestamp: "2026-08-26T08:00:04.000Z" },
+      { index: 5, role: "assistant", text: "Your shipment arrives Friday.", timestamp: "2026-08-26T08:00:05.000Z" },
+    ];
+    await writeFile(fixture.evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+    const reportPath = join(fixture.root, "reports", "long-journey.md");
+
+    expect(
+      await runCli(
+        ["report", fixture.summaryPath, "--output", reportPath],
+        cliDependencies([]),
+      ),
+    ).toBe(0);
+
+    const report = await readFile(reportPath, "utf8");
+    expect(report).toContain("Your shipment arrives Friday.");
+    expect(report).toContain("2 intermediate turns omitted");
+  });
+
+  test("highlights enough useful screenshots and network examples when available", async () => {
+    const fixture = await writeCorpusFixture();
+    const evidence = JSON.parse(await readFile(fixture.evidencePath, "utf8")) as {
+      screenshots: { path: string; kind: string }[];
+      network: Record<string, unknown>[];
+    };
+    const screenshotDirectory = join(fixture.root, "runs", "TRACK-001", "screenshots");
+    for (let index = 3; index <= 9; index += 1) {
+      const filename = `${String(index).padStart(2, "0")}-result.png`;
+      evidence.screenshots.push({ path: `screenshots/${filename}`, kind: "result" });
+      await writeFile(join(screenshotDirectory, filename), "screenshot");
+    }
+    evidence.network.push(
+      {
+        id: "request-2",
+        timestamp: "2026-08-26T08:00:00.200Z",
+        method: "GET",
+        url: "https://example.test/api/schedules",
+        resourceType: "fetch",
+        status: 200,
+      },
+      {
+        id: "request-3",
+        timestamp: "2026-08-26T08:00:00.300Z",
+        method: "POST",
+        url: "https://example.test/api/chat",
+        resourceType: "fetch",
+        status: 200,
+      },
+    );
+    await writeFile(fixture.evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+    const reportPath = join(fixture.root, "reports", "highlights.md");
+
+    expect(
+      await runCli(
+        ["report", fixture.summaryPath, "--output", reportPath],
+        cliDependencies([]),
+      ),
+    ).toBe(0);
+
+    const report = await readFile(reportPath, "utf8");
+    const highlights = report.slice(
+      report.indexOf("## Evidence Highlights"),
+      report.indexOf("## Analysis Cost"),
+    );
+    expect(highlights.match(/^- \[TRACK-001:/gmu)).toHaveLength(8);
+    expect(highlights).toContain("https://example.test/api/schedules");
+    expect(highlights).toContain("https://example.test/api/chat");
+  });
 });
 
 async function writeCorpusFixture(
   options: { readonly missingEvidence?: boolean; readonly observation?: string } = {},
-): Promise<{ root: string; summaryPath: string }> {
+): Promise<{ evidencePath: string; root: string; summaryPath: string }> {
   const root = await temporaryDirectories.create("maersk-report-");
   const caseDirectory = join(root, "runs", "TRACK-001");
   const summaryDirectory = join(root, "corpus");
@@ -238,7 +321,7 @@ async function writeCorpusFixture(
     writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`),
     writeFile(join(caseDirectory, "screenshots", "02-result.png"), "screenshot"),
   ]);
-  return { root, summaryPath };
+  return { evidencePath, root, summaryPath };
 }
 
 function cliDependencies(output: string[]): Parameters<typeof runCli>[1] {

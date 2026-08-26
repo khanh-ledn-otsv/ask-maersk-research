@@ -1,5 +1,4 @@
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import type {
   AnalysisUsage,
   ApiCandidateFinding,
@@ -7,94 +6,15 @@ import type {
   EvidenceReference,
   Finding,
 } from "../analysis/analyze-evidence.ts";
-import type { CorpusCaseResult, CorpusSummary } from "../corpus/run-research-corpus.ts";
-import type { CaseEvidence, NetworkEvidence } from "../domain/evidence.ts";
+import type { CorpusSummary } from "../corpus/run-research-corpus.ts";
+import type { NetworkEvidence } from "../domain/evidence.ts";
+import { referenceKey, type LoadedCase, type ReportData } from "./report-data.ts";
 
-interface LoadedCase {
-  readonly result: Extract<CorpusCaseResult, { status: "completed" }>;
-  readonly evidence: CaseEvidence;
-  readonly evidencePath: string;
-  readonly finding: Finding;
-  readonly supportedReferences: ReadonlySet<string>;
-}
-
-interface UnavailableCase {
-  readonly caseId: string;
-  readonly reason: string;
-}
-
-interface ReportData {
-  readonly available: readonly LoadedCase[];
-  readonly unavailable: readonly UnavailableCase[];
-}
-
-export interface GenerateResearchReportInput {
-  readonly outputPath: string;
-  readonly summaryPath: string;
-}
-
-export interface GeneratedResearchReport {
-  readonly outputPath: string;
-}
-
-export async function generateResearchReport(
-  input: GenerateResearchReportInput,
-): Promise<GeneratedResearchReport> {
-  const summary = await readJson<CorpusSummary>(input.summaryPath);
-  assertCorpusSummary(summary, input.summaryPath);
-  const data = await loadReportData(summary, input.summaryPath);
-  const markdown = await renderReport(summary, data, input.outputPath);
-  await mkdir(dirname(input.outputPath), { recursive: true });
-  await writeFile(input.outputPath, markdown, { flag: "wx" });
-  return { outputPath: input.outputPath };
-}
-
-async function loadReportData(
-  summary: CorpusSummary,
-  summaryPath: string,
-): Promise<ReportData> {
-  const available: LoadedCase[] = [];
-  const unavailable: UnavailableCase[] = summary.cases.flatMap((result) =>
-    result.status === "failed"
-      ? [{ caseId: result.caseId, reason: `failed: ${result.error}` }]
-      : result.status === "skipped"
-        ? [{ caseId: result.caseId, reason: `skipped: ${result.reason}` }]
-        : [],
-  );
-
-  for (const result of summary.cases) {
-    if (result.status !== "completed") continue;
-    const evidencePath = resolveArtifactPath(result.evidencePath, summaryPath);
-    const findingPath = resolveArtifactPath(result.findingPath, summaryPath);
-    try {
-      const [evidence, finding] = await Promise.all([
-        readJson<CaseEvidence>(evidencePath),
-        readJson<Finding>(findingPath),
-      ]);
-      assertEvidence(evidence);
-      assertFinding(finding);
-      available.push({
-        result,
-        evidence,
-        evidencePath,
-        finding,
-        supportedReferences: collectSupportedReferences(evidence),
-      });
-    } catch (error: unknown) {
-      unavailable.push({
-        caseId: result.caseId,
-        reason: `evidence unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      });
-    }
-  }
-  return { available, unavailable };
-}
-
-async function renderReport(
+export function renderResearchReport(
   summary: CorpusSummary,
   data: ReportData,
   outputPath: string,
-): Promise<string> {
+): string {
   const lines: string[] = [
     "# Ask Maersk Research Report",
     "",
@@ -124,10 +44,11 @@ async function renderReport(
     "",
     "## Strengths and Weaknesses",
     "",
+    "These are interaction signals, not correctness judgements; answer quality requires separate evaluation.",
+    "",
     "### Strengths",
     "",
     ...renderBehaviorGroup(data.available, outputPath, [
-      "clarification",
       "direct-answer",
       "guided-action",
     ]),
@@ -136,9 +57,15 @@ async function renderReport(
     "",
     ...renderBehaviorGroup(data.available, outputPath, [
       "failure",
+      "unknown",
+    ]),
+    "",
+    "### Context-dependent Patterns",
+    "",
+    ...renderBehaviorGroup(data.available, outputPath, [
+      "clarification",
       "handoff",
       "refusal",
-      "unknown",
     ]),
     "",
     "## Ask ONE Implications",
@@ -147,7 +74,7 @@ async function renderReport(
     "",
     "## Evidence Highlights",
     "",
-    ...await renderEvidenceHighlights(data.available, outputPath),
+    ...renderEvidenceHighlights(data.available, outputPath),
     "",
     "## Analysis Cost",
     "",
@@ -181,10 +108,8 @@ function renderCapabilityMap(cases: readonly LoadedCase[], outputPath: string): 
 }
 
 function renderJourneys(cases: readonly LoadedCase[], outputPath: string): string[] {
-  const journeys = cases.filter(hasSupportedBehavior).map((case_) => {
-    const turns = case_.evidence.conversation.slice(0, 4).map((turn) =>
-      `- **${turn.role === "user" ? "User" : "Ask Maersk"}:** ${escapeMarkdown(turn.text)} ${renderReferences(case_, [{ kind: "conversation", locator: String(turn.index) }], outputPath)}`,
-    );
+  const journeys = selectRepresentativeCases(cases).map((case_) => {
+    const turns = renderJourneyTurns(case_, outputPath);
     return [
       `### ${escapeMarkdown(case_.result.caseId)} — ${escapeMarkdown(case_.result.objective)}`,
       "",
@@ -196,6 +121,36 @@ function renderJourneys(cases: readonly LoadedCase[], outputPath: string): strin
   return journeys.length === 0
     ? ["No representative journey has complete, cited evidence in this run."]
     : journeys;
+}
+
+function selectRepresentativeCases(cases: readonly LoadedCase[]): readonly LoadedCase[] {
+  const supported = cases.filter(hasSupportedBehavior);
+  const selected: LoadedCase[] = [];
+  const selectedIds = new Set<string>();
+  const categories = new Set<string>();
+  for (const case_ of supported) {
+    if (categories.has(case_.result.category)) continue;
+    selected.push(case_);
+    selectedIds.add(case_.result.caseId);
+    categories.add(case_.result.category);
+    if (selected.length === 5) return selected;
+  }
+  for (const case_ of supported) {
+    if (selectedIds.has(case_.result.caseId)) continue;
+    selected.push(case_);
+    if (selected.length === 5) break;
+  }
+  return selected;
+}
+
+function renderJourneyTurns(case_: LoadedCase, outputPath: string): string[] {
+  const turns = case_.evidence.conversation;
+  const selected = turns.length <= 4 ? turns : [...turns.slice(0, 2), ...turns.slice(-2)];
+  const lines = selected.map((turn) =>
+    `- **${turn.role === "user" ? "User" : "Ask Maersk"}:** ${escapeMarkdown(turn.text)} ${renderReferences(case_, [{ kind: "conversation", locator: String(turn.index) }], outputPath)}`,
+  );
+  if (turns.length > 4) lines.splice(2, 0, `- _${turns.length - 4} intermediate turns omitted_`);
+  return lines;
 }
 
 function renderPrimaryMatrix(cases: readonly LoadedCase[], outputPath: string): string[] {
@@ -265,46 +220,78 @@ function renderImplications(cases: readonly LoadedCase[], outputPath: string): s
     : implications;
 }
 
-async function renderEvidenceHighlights(
+function renderEvidenceHighlights(
   cases: readonly LoadedCase[],
   outputPath: string,
-): Promise<string[]> {
-  const screenshots: { case_: LoadedCase; reference: EvidenceReference }[] = [];
-  const networks: { case_: LoadedCase; candidate: ApiCandidateFinding; reference: EvidenceReference }[] = [];
-  const screenshotKeys = new Set<string>();
-  const networkKeys = new Set<string>();
+): string[] {
+  const screenshots: {
+    case_: LoadedCase;
+    path: string;
+    referenced: boolean;
+    score: number;
+  }[] = [];
+  const networks: {
+    candidate?: ApiCandidateFinding;
+    case_: LoadedCase;
+    network: NetworkEvidence;
+    score: number;
+  }[] = [];
   for (const case_ of cases) {
     const claimReferences = [
       ...case_.finding.behavior.evidenceReferences,
       ...supportedCandidates(case_).flatMap(({ evidenceReferences }) => evidenceReferences),
       ...supportedImplications(case_).flatMap(({ evidenceReferences }) => evidenceReferences),
     ];
-    for (const reference of claimReferences) {
-      const key = `${case_.result.caseId}:${reference.kind}:${reference.locator}`;
-      if (reference.kind === "screenshot" && !screenshotKeys.has(key)) {
-        screenshotKeys.add(key);
-        const target = join(dirname(case_.evidencePath), reference.locator);
-        if (await fileExists(target)) screenshots.push({ case_, reference });
-      }
+    const referencedScreenshots = new Set(
+      claimReferences
+        .filter(({ kind }) => kind === "screenshot")
+        .map(({ locator }) => locator),
+    );
+    for (const screenshot of case_.evidence.screenshots) {
+      const target = join(dirname(case_.evidencePath), screenshot.path);
+      if (!case_.availableScreenshotPaths.has(screenshot.path)) continue;
+      const referenced = referencedScreenshots.has(screenshot.path);
+      const kindScore = screenshot.kind === "result" ? 30 : screenshot.kind === "error" ? 20 : 0;
+      screenshots.push({
+        case_,
+        path: screenshot.path,
+        referenced,
+        score: (referenced ? 100 : 0) + kindScore,
+      });
     }
-    for (const candidate of supportedCandidates(case_)) {
-      for (const reference of candidate.evidenceReferences) {
-        const key = `${case_.result.caseId}:${reference.kind}:${reference.locator}`;
-        if (reference.kind === "network" && !networkKeys.has(key)) {
-          networkKeys.add(key);
-          networks.push({ case_, candidate, reference });
-        }
-      }
+    const candidates = supportedCandidates(case_);
+    for (const network of case_.evidence.network) {
+      const candidate = candidates.find(({ evidenceReferences }) =>
+        evidenceReferences.some(
+          ({ kind, locator }) => kind === "network" && locator === network.id,
+        )
+      );
+      const bodyScore = typeof network.requestBody === "undefined" &&
+          typeof network.responseBody === "undefined"
+        ? 0
+        : 20;
+      networks.push({
+        case_,
+        network,
+        score: (typeof candidate === "undefined" ? 0 : 100) +
+          (typeof network.status === "undefined" ? 0 : 10) + bodyScore,
+        ...(typeof candidate === "undefined" ? {} : { candidate }),
+      });
     }
   }
+  screenshots.sort((left, right) => right.score - left.score);
+  networks.sort((left, right) => right.score - left.score);
   const lines = ["### Screenshots", ""];
   if (screenshots.length === 0) {
     lines.push("No cited screenshot file is available in this run.");
   } else {
-    for (const { case_, reference } of screenshots.slice(0, 12)) {
-      const target = join(dirname(case_.evidencePath), reference.locator);
+    for (const { case_, path, referenced } of screenshots.slice(0, 12)) {
+      const target = join(dirname(case_.evidencePath), path);
+      const description = referenced
+        ? case_.finding.behavior.claim
+        : `${case_.evidence.screenshots.find((entry) => entry.path === path)?.kind ?? "captured"} screenshot`;
       lines.push(
-        `- [${escapeLinkLabel(`${case_.result.caseId}: ${case_.finding.behavior.claim}`)}](${linkTarget(outputPath, target)})`,
+        `- [${escapeLinkLabel(`${case_.result.caseId}: ${description}`)}](${linkTarget(outputPath, target)})`,
       );
     }
   }
@@ -312,10 +299,10 @@ async function renderEvidenceHighlights(
   if (networks.length === 0) {
     lines.push("No cited network/API example is available in this run.");
   } else {
-    for (const { case_, candidate, reference } of networks.slice(0, 3)) {
-      const network = case_.evidence.network.find(({ id }) => id === reference.locator);
+    for (const { case_, candidate, network } of networks.slice(0, 3)) {
+      const label = candidate?.name ?? case_.result.caseId;
       lines.push(
-        `- **${escapeMarkdown(candidate.name)}:** ${escapeMarkdown(formatNetwork(network, reference.locator))} ${renderReferences(case_, [reference], outputPath)}`,
+        `- **${escapeMarkdown(label)}:** ${escapeMarkdown(formatNetwork(network, network.id))} ${renderReferences(case_, [{ kind: "network", locator: network.id }], outputPath)}`,
       );
     }
   }
@@ -398,29 +385,14 @@ function renderReferences(
     .join(", ");
 }
 
-function collectSupportedReferences(evidence: CaseEvidence): ReadonlySet<string> {
-  return new Set([
-    "page:page",
-    ...evidence.conversation.map(({ index }) => `conversation:${index}`),
-    ...evidence.screenshots.map(({ path }) => `screenshot:${path}`),
-    ...evidence.network.map(({ id }) => `network:${id}`),
-    ...evidence.timings.map(({ turnIndex }) => `timing:${turnIndex}`),
-    ...evidence.errors.map((_, index) => `error:${index}`),
-  ]);
-}
-
 function uniqueReferences(references: readonly EvidenceReference[]): readonly EvidenceReference[] {
-  const seen = new Set<string>();
+  const seen = new Set<ReturnType<typeof referenceKey>>();
   return references.filter((reference) => {
     const key = referenceKey(reference);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-}
-
-function referenceKey(reference: EvidenceReference): string {
-  return `${reference.kind}:${reference.locator}`;
 }
 
 function referenceLabel(reference: EvidenceReference): string {
@@ -430,10 +402,6 @@ function referenceLabel(reference: EvidenceReference): string {
   if (reference.kind === "page") return "captured page";
   if (reference.kind === "network") return `network ${reference.locator}`;
   return `screenshot ${reference.locator}`;
-}
-
-function resolveArtifactPath(path: string, summaryPath: string): string {
-  return isAbsolute(path) ? path : resolve(dirname(summaryPath), path);
 }
 
 function linkTarget(outputPath: string, targetPath: string): string {
@@ -470,48 +438,4 @@ function formatNetwork(network: NetworkEvidence | undefined, locator: string): s
   return typeof network === "undefined"
     ? `network request ${locator}`
     : `${network.method} ${network.url}${typeof network.status === "undefined" ? "" : ` (${network.status})`}`;
-}
-
-async function readJson<T>(path: string): Promise<T> {
-  return JSON.parse(await readFile(path, "utf8")) as T;
-}
-
-async function fileExists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function assertCorpusSummary(value: CorpusSummary, path: string): void {
-  if (value.schemaVersion !== 1 || !Array.isArray(value.cases)) {
-    throw new Error(`Invalid corpus summary: ${path}.`);
-  }
-}
-
-function assertEvidence(value: CaseEvidence): void {
-  if (
-    typeof value.runId !== "string" ||
-    !Array.isArray(value.conversation) ||
-    !Array.isArray(value.screenshots) ||
-    !Array.isArray(value.network) ||
-    !Array.isArray(value.timings) ||
-    !Array.isArray(value.errors)
-  ) {
-    throw new Error("invalid evidence file");
-  }
-}
-
-function assertFinding(value: Finding): void {
-  if (
-    value.schemaVersion !== 1 ||
-    typeof value.behavior?.claim !== "string" ||
-    !Array.isArray(value.behavior.evidenceReferences) ||
-    !Array.isArray(value.apiCandidates) ||
-    !Array.isArray(value.askOneImplications)
-  ) {
-    throw new Error("invalid finding file");
-  }
 }
