@@ -16,6 +16,7 @@ export interface CliDependencies {
 
 interface RecordOptions {
   readonly outputRoot: string;
+  readonly sensitiveValues: readonly string[];
   readonly targetUrl: string;
   readonly userMessage: string;
 }
@@ -48,6 +49,7 @@ export async function runCli(
   const result = await recordResearchSession(
     {
       outputRoot: parsed.options.outputRoot,
+      sensitiveValues: parsed.options.sensitiveValues,
       targetUrl: parsed.options.targetUrl,
       userMessage: parsed.options.userMessage,
       waitForCompletion: dependencies.waitForCompletion,
@@ -100,7 +102,16 @@ function parseRecordOptions(
       targetUrl: parsedUrl.toString(),
       outputRoot:
         values.get("--output") ?? environment.RESEARCH_OUTPUT_DIR ?? join(process.cwd(), "data", "runs"),
+      sensitiveValues: parseSensitiveValues(environment.ASK_MAERSK_CUSTOMER_IDENTIFIERS),
       userMessage: values.get("--message") ?? "Track my shipment",
     },
   };
+}
+
+function parseSensitiveValues(value: string | undefined): readonly string[] {
+  if (typeof value === "undefined") return [];
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
 }

@@ -9,6 +9,7 @@ import {
   redactConversationTurn,
   redactNetworkEvidence,
   redactRecordedError,
+  redactText,
   redactUrl,
 } from "../security/redaction.ts";
 
@@ -18,12 +19,14 @@ export interface BrowserRecorder {
 
 export interface BrowserRecordingInput {
   readonly expectedUserMessage: string;
+  readonly sensitiveValues?: readonly string[];
   readonly targetUrl: string;
   readonly waitForCompletion: () => Promise<void>;
 }
 
 export interface RecordResearchSessionInput {
   readonly outputRoot: string;
+  readonly sensitiveValues?: readonly string[];
   readonly targetUrl: string;
   readonly userMessage: string;
   readonly waitForCompletion: () => Promise<void>;
@@ -49,6 +52,7 @@ export async function recordResearchSession(
   const runDirectory = join(input.outputRoot, runId);
   const capture = await dependencies.browser.capture({
     expectedUserMessage: input.userMessage,
+    sensitiveValues: input.sensitiveValues ?? [],
     targetUrl: input.targetUrl,
     waitForCompletion: input.waitForCompletion,
   });
@@ -57,6 +61,7 @@ export async function recordResearchSession(
     startedAt,
     dependencies.now().toISOString(),
     capture,
+    input.sensitiveValues ?? [],
   );
 
   await persistRun({ evidence, runDirectory, screenshots: capture.screenshots });
@@ -68,17 +73,21 @@ function buildEvidence(
   startedAt: string,
   completedAt: string,
   capture: BrowserCapture,
+  sensitiveValues: readonly string[],
 ): CaseEvidence {
   return {
     runId,
     startedAt,
     completedAt,
-    conversation: capture.conversation.map(redactConversationTurn),
+    conversation: capture.conversation.map((turn) => redactConversationTurn(turn, sensitiveValues)),
     screenshots: capture.screenshots.map(toScreenshotEvidence),
-    network: capture.network.map(redactNetworkEvidence),
+    network: capture.network.map((entry) => redactNetworkEvidence(entry, sensitiveValues)),
     timings: { ...capture.timings },
-    page: { url: redactUrl(capture.page.url), title: capture.page.title },
-    errors: capture.errors.map(redactRecordedError),
+    page: {
+      url: redactUrl(capture.page.url, sensitiveValues),
+      title: redactText(capture.page.title, sensitiveValues),
+    },
+    errors: capture.errors.map((error) => redactRecordedError(error, sensitiveValues)),
   };
 }
 

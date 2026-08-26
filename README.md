@@ -40,7 +40,7 @@ Override the configured URL, output directory, or known prompt when needed:
 pnpm research record --url https://example.test/ask-maersk --output data/runs --message "Track my shipment"
 ```
 
-Sensitive URL parameters, headers, structured body keys, and recognizable token strings are redacted in memory before JSON or JSONL is written. Screenshots black out form fields, observed user-message text, and every element matched by `ASK_MAERSK_SENSITIVE_SELECTOR`. Configure that selector for the target UI, and continue to use fake or authorized test data because no generic image redactor can recognize every customer-specific value.
+Sensitive URL parameters, headers, structured body keys, recognizable token strings, and values listed in the comma-separated `ASK_MAERSK_CUSTOMER_IDENTIFIERS` setting are redacted in memory before JSON or JSONL is written. Screenshots black out form fields, observed user-message text, configured customer identifiers, and every element matched by `ASK_MAERSK_SENSITIVE_SELECTOR`. Configure these settings for the target UI, and continue to use fake or authorized test data because no generic image redactor can recognize every customer-specific value.
 
 ## Verify
 

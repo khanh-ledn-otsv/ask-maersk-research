@@ -201,6 +201,105 @@ describe("recordResearchSession", () => {
     ).rejects.toMatchObject({ code: "EEXIST" });
     expect(await readdir(runDirectory)).toEqual([]);
   });
+
+  test("redacts configured customer identifiers and secrets from every persisted text artifact", async () => {
+    const outputRoot = await temporaryDirectories.create("maersk-research-sensitive-");
+    const customerIdentifier = "CUSTOMER-123456";
+    const browser: BrowserRecorder = {
+      async capture() {
+        return {
+          page: {
+            url: `https://example.test/customers/${customerIdentifier}?reference=${customerIdentifier}`,
+            title: `Ask Maersk for ${customerIdentifier}`,
+          },
+          conversation: [
+            {
+              index: 0,
+              role: "user",
+              text: `Track shipment for ${customerIdentifier}`,
+              timestamp: "2026-08-25T16:00:00.000Z",
+            },
+          ],
+          screenshots: [],
+          network: [
+            {
+              id: "request-1",
+              timestamp: "2026-08-25T16:00:00.000Z",
+              method: "POST",
+              url: `https://api-user:api-password@example.test/graphql/${customerIdentifier}#access_token=fragment-token`,
+              resourceType: "fetch",
+              requestHeaders: {
+                Authorization: "Bearer bearer-credential",
+                Cookie: "session=session-cookie-value",
+                "X-CSRF-Token": "csrf-value",
+              },
+              requestBody: {
+                apiKey: "api-key-value",
+                customer: customerIdentifier,
+                variables: { sessionId: "session-id-value" },
+              },
+              responseBody: {
+                customer: customerIdentifier,
+                refreshToken: "refresh-token-value",
+              },
+              failure: `Request failed for ${customerIdentifier} with password=hunter2 token=plain-token`,
+              frames: [
+                {
+                  direction: "sent",
+                  timestamp: "2026-08-25T16:00:00.500Z",
+                  payload: Buffer.from(customerIdentifier).toString("base64"),
+                  payloadEncoding: "base64",
+                },
+              ],
+            },
+          ],
+          timings: { submittedAt: "2026-08-25T16:00:00.000Z" },
+          errors: [
+            {
+              timestamp: "2026-08-25T16:00:01.000Z",
+              message: `Login wall for ${customerIdentifier}; Cookie: session-cookie-value`,
+              source: "browser",
+            },
+          ],
+        };
+      },
+    };
+
+    const result = await recordResearchSession(
+      {
+        outputRoot,
+        sensitiveValues: [customerIdentifier],
+        targetUrl: "https://example.test/",
+        userMessage: `Track shipment for ${customerIdentifier}`,
+        waitForCompletion: async () => undefined,
+      },
+      {
+        browser,
+        createRunId: () => "sensitive",
+        now: () => new Date("2026-08-25T16:00:00.000Z"),
+      },
+    );
+
+    const persistedText = await readAllText(result.runDirectory);
+    for (const secret of [
+      customerIdentifier,
+      "bearer-credential",
+      "session-cookie-value",
+      "csrf-value",
+      "api-key-value",
+      "session-id-value",
+      "refresh-token-value",
+      "hunter2",
+      "api-user",
+      "api-password",
+      "fragment-token",
+      "plain-token",
+      Buffer.from(customerIdentifier).toString("base64"),
+    ]) {
+      expect(persistedText).not.toContain(secret);
+    }
+    expect(persistedText).toContain("[REDACTED]");
+  });
 });
 
 async function readAllText(directory: string): Promise<string> {

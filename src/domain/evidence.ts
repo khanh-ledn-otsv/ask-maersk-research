@@ -30,6 +30,15 @@ export interface NetworkEvidence {
   readonly responseBody?: unknown;
   readonly durationMs?: number;
   readonly failure?: string;
+  readonly frames?: readonly NetworkFrameEvidence[];
+}
+
+export interface NetworkFrameEvidence {
+  readonly direction: "received" | "sent";
+  readonly eventName?: string;
+  readonly timestamp: string;
+  readonly payload: string;
+  readonly payloadEncoding: "base64" | "utf8";
 }
 
 export interface TimingEvidence {
