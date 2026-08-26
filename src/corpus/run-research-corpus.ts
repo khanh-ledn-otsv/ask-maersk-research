@@ -18,7 +18,7 @@ export type CorpusSelection =
 
 export type CorpusAnalysisPolicy = AnalysisPolicy;
 
-export type CorpusCaseExecution =
+export type CorpusCaseOutcome =
   | {
       readonly status: "captured";
       readonly evidencePath: string;
@@ -42,6 +42,8 @@ export type CorpusCaseExecution =
   | { readonly status: "preflight-required"; readonly reason: string }
   | { readonly status: "skipped"; readonly reason: string };
 
+export type CorpusCaseExecution = CorpusCaseOutcome;
+
 export interface CorpusCaseDescriptor {
   readonly caseId: string;
   readonly category: ResearchCategory;
@@ -52,37 +54,16 @@ export interface CorpusCaseDescriptor {
   readonly notes?: string;
 }
 
+type ResumableCorpusCaseOutcome = Extract<
+  CorpusCaseOutcome,
+  { status: "captured" | "completed" }
+> & { readonly resumed?: true };
+
 export type CorpusCaseResult = CorpusCaseDescriptor &
-  ({
-      readonly status: "captured";
-      readonly evidencePath: string;
-      readonly resumed?: true;
-    }
-  | {
-      readonly status: "completed";
-      readonly evidencePath: string;
-      readonly findingPath: string;
-      readonly usage?: AnalysisUsage;
-      readonly resumed?: true;
-    }
-  | {
-      readonly status: "failed";
-      readonly error: string;
-      readonly evidencePath?: string;
-    }
-  | {
-      readonly status: "capture-failed";
-      readonly error: string;
-      readonly evidencePath?: string;
-    }
-  | {
-      readonly status: "preflight-required";
-      readonly reason: string;
-    }
-  | {
-      readonly status: "skipped";
-      readonly reason: string;
-    });
+  (
+    | Exclude<CorpusCaseOutcome, { status: "captured" | "completed" }>
+    | ResumableCorpusCaseOutcome
+  );
 
 interface CorpusSummaryBase {
   readonly corpusRunId: string;
@@ -119,15 +100,12 @@ interface RunResearchCorpusInputBase {
 export type RunResearchCorpusInput = RunResearchCorpusInputBase &
   (
     | { readonly mode: "capture-only" }
-    | { readonly analysisPolicy: CorpusAnalysisPolicy; readonly mode?: "analyzed" }
+    | { readonly analysisPolicy: CorpusAnalysisPolicy; readonly mode: "analyzed" }
   );
 
 export interface RunResearchCorpusDependencies {
   readonly createCorpusRunId: () => string;
-  readonly executeCase: (
-    case_: ResearchCase,
-    analysisPolicy: CorpusAnalysisPolicy | undefined,
-  ) => Promise<CorpusCaseExecution>;
+  readonly executeCase: (case_: ResearchCase) => Promise<CorpusCaseExecution>;
   readonly now: () => Date;
 }
 
@@ -147,6 +125,7 @@ export async function runResearchCorpus(
   const corpusRunId = `${formatRunTimestamp(startedAt)}_${dependencies.createCorpusRunId()}`;
   const runDirectory = join(input.outputRoot, corpusRunId);
   const resumableStatus = input.mode === "capture-only" ? "captured" : "completed";
+  const failureStatus = input.mode === "capture-only" ? "capture-failed" : "failed";
   const priorCompleted = new Map(
     (input.resumeFrom?.cases ?? [])
       .filter(
@@ -168,8 +147,7 @@ export async function runResearchCorpus(
     results.push(
       await executeCase(
         case_,
-        input.mode === "capture-only" ? undefined : input.analysisPolicy,
-        input.mode === "capture-only",
+        failureStatus,
         dependencies,
       ),
     );
@@ -241,8 +219,7 @@ function assertCompatibleResume(input: RunResearchCorpusInput): void {
 
 async function executeCase(
   case_: ResearchCase,
-  analysisPolicy: CorpusAnalysisPolicy | undefined,
-  captureOnly: boolean,
+  failureStatus: "capture-failed" | "failed",
   dependencies: RunResearchCorpusDependencies,
 ): Promise<CorpusCaseResult> {
   const caseDescriptor = {
@@ -255,12 +232,12 @@ async function executeCase(
     ...(typeof case_.notes === "undefined" ? {} : { notes: case_.notes }),
   };
   try {
-    const execution = await dependencies.executeCase(case_, analysisPolicy);
+    const execution = await dependencies.executeCase(case_);
     return { ...caseDescriptor, ...execution };
   } catch (error: unknown) {
     return {
       ...caseDescriptor,
-      status: captureOnly ? "capture-failed" : "failed",
+      status: failureStatus,
       error: error instanceof Error ? error.message : String(error),
     };
   }

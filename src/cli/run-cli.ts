@@ -162,13 +162,13 @@ function parseRunOptions(
   if (typeof caseId === "undefined" || caseId.startsWith("--")) {
     return { ok: false, message: "Usage: pnpm research run <case-id> [options]" };
   }
-  const parsedFlags = parseFlags(flags, [
-    "--cases",
-    "--input-selector",
-    "--output",
-    "--submit-selector",
-    "--url",
-  ]);
+  const parsedFlags = parseFlags(flags, {
+    "--cases": "value",
+    "--input-selector": "value",
+    "--output": "value",
+    "--submit-selector": "value",
+    "--url": "value",
+  });
   if (!parsedFlags.ok) return parsedFlags;
   const common = resolveCommonOptions(parsedFlags.values, environment, undefined);
   if (!common.ok) return common;
@@ -196,7 +196,11 @@ function parseRecordOptions(
   arguments_: readonly string[],
   environment: Readonly<Record<string, string | undefined>>,
 ): RecordOptionsResult {
-  const parsedFlags = parseFlags(arguments_, ["--message", "--output", "--url"]);
+  const parsedFlags = parseFlags(arguments_, {
+    "--message": "value",
+    "--output": "value",
+    "--url": "value",
+  });
   if (!parsedFlags.ok) return parsedFlags;
   return resolveCommonOptions(
     parsedFlags.values,

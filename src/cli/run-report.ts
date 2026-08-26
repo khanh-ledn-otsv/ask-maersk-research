@@ -17,7 +17,7 @@ export async function runReport(
     stderr("Usage: pnpm research report <corpus-summary> [--output <report-path>]");
     return 1;
   }
-  const parsed = parseFlags(flags, ["--output"]);
+  const parsed = parseFlags(flags, { "--output": "value" });
   if (!parsed.ok) {
     stderr(parsed.message);
     return 1;

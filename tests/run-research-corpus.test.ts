@@ -19,6 +19,7 @@ describe("runResearchCorpus", () => {
     const result = await runResearchCorpus(
       {
         analysisPolicy: { model: "gpt-5.4-mini", reasoningEffort: "none" },
+        mode: "analyzed",
         cases: [
           researchCase("TRACK-002", "TRACKING"),
           researchCase("CAPABILITY-001", "CAPABILITY"),
@@ -84,6 +85,7 @@ describe("runResearchCorpus", () => {
     const result = await runResearchCorpus(
       {
         analysisPolicy: { model: "gpt-5.4-mini", reasoningEffort: "none" },
+        mode: "analyzed",
         cases,
         outputRoot,
         selection: { caseId: "AUTH-002" },
@@ -100,6 +102,7 @@ describe("runResearchCorpus", () => {
       runResearchCorpus(
         {
           analysisPolicy: { model: "gpt-5.4-mini", reasoningEffort: "none" },
+          mode: "analyzed",
           cases,
           outputRoot,
           selection: { caseId: "MISSING" },
@@ -115,6 +118,7 @@ describe("runResearchCorpus", () => {
     const first = await runResearchCorpus(
       {
         analysisPolicy: { model: "gpt-5.4-mini", reasoningEffort: "none" },
+        mode: "analyzed",
         cases,
         outputRoot,
         selection: { category: "KNOWLEDGE" },
@@ -130,6 +134,7 @@ describe("runResearchCorpus", () => {
     const resumed = await runResearchCorpus(
       {
         analysisPolicy: { model: "gpt-5.4-mini", reasoningEffort: "none" },
+        mode: "analyzed",
         cases,
         outputRoot,
         resumeFrom: first.summary,

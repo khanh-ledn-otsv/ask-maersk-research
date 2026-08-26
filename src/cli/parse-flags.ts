@@ -2,17 +2,19 @@ export type FlagsResult =
   | { readonly ok: true; readonly values: ReadonlyMap<string, string> }
   | { readonly message: string; readonly ok: false };
 
+export type FlagDefinitions = Readonly<Record<string, "boolean" | "value">>;
+
 export function parseFlags(
   arguments_: readonly string[],
-  allowed: readonly string[],
-  booleanFlags: readonly string[] = [],
+  definitions: FlagDefinitions,
 ): FlagsResult {
   const values = new Map<string, string>();
   for (let index = 0; index < arguments_.length;) {
     const flag = arguments_[index];
     if (typeof flag === "undefined") break;
-    if (!allowed.includes(flag)) return { ok: false, message: `Unknown option: ${flag}` };
-    if (booleanFlags.includes(flag)) {
+    const kind = definitions[flag];
+    if (typeof kind === "undefined") return { ok: false, message: `Unknown option: ${flag}` };
+    if (kind === "boolean") {
       values.set(flag, "true");
       index += 1;
       continue;

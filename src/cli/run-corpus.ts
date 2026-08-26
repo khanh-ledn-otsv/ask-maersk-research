@@ -31,9 +31,7 @@ export interface CorpusCliDependencies {
   readonly waitForCompletion: () => Promise<void>;
 }
 
-interface CorpusOptions {
-  readonly analysisPolicy?: CorpusAnalysisPolicy;
-  readonly captureOnly: boolean;
+interface CorpusOptionsBase {
   readonly casesDirectory: string;
   readonly evidenceOutputRoot: string;
   readonly inputSelector?: string;
@@ -43,6 +41,23 @@ interface CorpusOptions {
   readonly summaryOutputRoot: string;
   readonly targetUrl: string;
 }
+
+type CorpusOptions = CorpusOptionsBase &
+  (
+    | { readonly mode: "capture-only" }
+    | { readonly analysisPolicy: CorpusAnalysisPolicy; readonly mode: "analyzed" }
+  );
+
+type CorpusExecution =
+  | {
+      readonly mode: "capture-only";
+      readonly executeCase: (case_: ResearchCase) => Promise<CorpusCaseExecution>;
+    }
+  | {
+      readonly mode: "analyzed";
+      readonly analysisPolicy: CorpusAnalysisPolicy;
+      readonly executeCase: (case_: ResearchCase) => Promise<CorpusCaseExecution>;
+    };
 
 type CorpusOptionsResult =
   | { readonly ok: true; readonly options: CorpusOptions }
@@ -58,19 +73,8 @@ export async function runCorpus(
     stderr(parsed.message);
     return 1;
   }
-  let analyzer: Analyzer | undefined;
-  if (!parsed.options.captureOnly) {
-    const apiKey = dependencies.environment.OPEN_AI_API_KEY;
-    if (typeof apiKey === "undefined" || apiKey.trim().length === 0) {
-      stderr("OPEN_AI_API_KEY is required for corpus analysis.");
-      return 1;
-    }
-    if (typeof dependencies.createAnalyzer === "undefined") {
-      stderr("Corpus analysis is not configured.");
-      return 1;
-    }
-    analyzer = dependencies.createAnalyzer(apiKey);
-  }
+  const execution = createCorpusExecution(parsed.options, dependencies, stderr);
+  if (typeof execution === "undefined") return 1;
 
   try {
     const [cases, resumeFrom] = await Promise.all([
@@ -82,9 +86,9 @@ export async function runCorpus(
     const result = await runResearchCorpus(
       {
         cases,
-        ...(parsed.options.captureOnly
+        ...(execution.mode === "capture-only"
           ? { mode: "capture-only" as const }
-          : { analysisPolicy: parsed.options.analysisPolicy!, mode: "analyzed" as const }),
+          : { analysisPolicy: execution.analysisPolicy, mode: "analyzed" as const }),
         outputRoot: parsed.options.summaryOutputRoot,
         selection: parsed.options.selection,
         ...(typeof resumeFrom === "undefined" ? {} : { resumeFrom }),
@@ -94,8 +98,7 @@ export async function runCorpus(
       },
       {
         createCorpusRunId: dependencies.createCorpusRunId ?? dependencies.createRunId,
-        executeCase: (case_, policy) =>
-          executeSelectedCase(case_, policy, parsed.options, analyzer, dependencies),
+        executeCase: execution.executeCase,
         now: dependencies.now,
       },
     );
@@ -120,14 +123,41 @@ export async function runCorpus(
   }
 }
 
-async function executeSelectedCase(
-  case_: ResearchCase,
-  policy: CorpusAnalysisPolicy | undefined,
+function createCorpusExecution(
   options: CorpusOptions,
-  analyzer: Analyzer | undefined,
+  dependencies: CorpusCliDependencies,
+  stderr: (message: string) => void,
+): CorpusExecution | undefined {
+  if (options.mode === "capture-only") {
+    return {
+      mode: "capture-only",
+      executeCase: (case_) => executeSelectedCaptureCase(case_, options, dependencies),
+    };
+  }
+  const apiKey = dependencies.environment.OPEN_AI_API_KEY;
+  if (typeof apiKey === "undefined" || apiKey.trim().length === 0) {
+    stderr("OPEN_AI_API_KEY is required for corpus analysis.");
+    return undefined;
+  }
+  if (typeof dependencies.createAnalyzer === "undefined") {
+    stderr("Corpus analysis is not configured.");
+    return undefined;
+  }
+  const analyzer = dependencies.createAnalyzer(apiKey);
+  return {
+    mode: "analyzed",
+    analysisPolicy: options.analysisPolicy,
+    executeCase: (case_) =>
+      executeSelectedAnalyzedCase(case_, options, analyzer, dependencies),
+  };
+}
+
+async function executeSelectedCaptureCase(
+  case_: ResearchCase,
+  options: Extract<CorpusOptions, { mode: "capture-only" }>,
   dependencies: CorpusCliDependencies,
 ): Promise<CorpusCaseExecution> {
-  if (options.captureOnly && case_.executionMode === "manual") {
+  if (case_.executionMode === "manual") {
     if (case_.dataPolicy === "authorized") {
       return {
         status: "skipped",
@@ -142,10 +172,29 @@ async function executeSelectedCase(
   const interaction = resolveCaseInteraction(case_, options);
   if (typeof interaction === "undefined") {
     return {
-      status: options.captureOnly ? "preflight-required" : "skipped",
-      reason: options.captureOnly
-        ? "Automated case requires ASK_MAERSK_INPUT_SELECTOR before capture."
-        : "Automated case skipped because ASK_MAERSK_INPUT_SELECTOR is not configured.",
+      status: "preflight-required",
+      reason: "Automated case requires ASK_MAERSK_INPUT_SELECTOR before capture.",
+    };
+  }
+  dependencies.stdout(`Running ${case_.id}: ${case_.objective}`);
+  return captureCorpusCase(
+    case_,
+    executionOptions(interaction, options, dependencies),
+    executionDependencies(dependencies),
+  );
+}
+
+async function executeSelectedAnalyzedCase(
+  case_: ResearchCase,
+  options: Extract<CorpusOptions, { mode: "analyzed" }>,
+  analyzer: Analyzer,
+  dependencies: CorpusCliDependencies,
+): Promise<CorpusCaseExecution> {
+  const interaction = resolveCaseInteraction(case_, options);
+  if (typeof interaction === "undefined") {
+    return {
+      status: "skipped",
+      reason: "Automated case skipped because ASK_MAERSK_INPUT_SELECTOR is not configured.",
     };
   }
   dependencies.stdout(`Running ${case_.id}: ${case_.objective}`);
@@ -154,45 +203,54 @@ async function executeSelectedCase(
       "Interact with Ask Maersk, then return here and press Enter to save evidence.",
     );
   }
-  const executionOptions = {
+  return executeCorpusCase(
+    case_,
+    options.analysisPolicy,
+    executionOptions(interaction, options, dependencies),
+    { ...executionDependencies(dependencies), analyzer },
+  );
+}
+
+function executionOptions(
+  interaction: NonNullable<ReturnType<typeof resolveCaseInteraction>>,
+  options: CorpusOptionsBase,
+  dependencies: CorpusCliDependencies,
+) {
+  return {
     interaction,
     outputRoot: options.evidenceOutputRoot,
     targetUrl: options.targetUrl,
     waitForCompletion: dependencies.waitForCompletion,
   };
-  const executionDependencies = {
+}
+
+function executionDependencies(dependencies: CorpusCliDependencies) {
+  return {
     browser: dependencies.browser,
     createRunId: dependencies.createRunId,
     now: dependencies.now,
   };
-  if (options.captureOnly) {
-    return captureCorpusCase(case_, executionOptions, executionDependencies);
-  }
-  return executeCorpusCase(case_, policy!, executionOptions, {
-    ...executionDependencies,
-    analyzer: analyzer!,
-  });
 }
 
 function parseCorpusOptions(
   arguments_: readonly string[],
   environment: Readonly<Record<string, string | undefined>>,
 ): CorpusOptionsResult {
-  const parsedFlags = parseFlags(arguments_, [
-    "--all",
-    "--case",
-    "--cases",
-    "--capture-only",
-    "--category",
-    "--input-selector",
-    "--model",
-    "--output",
-    "--reasoning-effort",
-    "--resume",
-    "--submit-selector",
-    "--summary-output",
-    "--url",
-  ], ["--all", "--capture-only"]);
+  const parsedFlags = parseFlags(arguments_, {
+    "--all": "boolean",
+    "--case": "value",
+    "--cases": "value",
+    "--capture-only": "boolean",
+    "--category": "value",
+    "--input-selector": "value",
+    "--model": "value",
+    "--output": "value",
+    "--reasoning-effort": "value",
+    "--resume": "value",
+    "--submit-selector": "value",
+    "--summary-output": "value",
+    "--url": "value",
+  });
   if (!parsedFlags.ok) return parsedFlags;
   const caseId = parsedFlags.values.get("--case");
   const category = parsedFlags.values.get("--category");
@@ -229,37 +287,46 @@ function parseCorpusOptions(
   if (parsedUrl === null || (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:")) {
     return { ok: false, message: "Ask Maersk URL must be an http:// or https:// URL." };
   }
-  const policy = captureOnly ? undefined : resolveAnalysisPolicy(parsedFlags.values, environment);
-  if (typeof policy !== "undefined" && !policy.ok) return policy;
-  const selection: CorpusSelection =
-    all ? { all: true } : typeof caseId === "undefined" ? { category: category! } : { caseId };
+  let selection: CorpusSelection;
+  if (all) selection = { all: true };
+  else if (typeof caseId !== "undefined") selection = { caseId };
+  else if (typeof category !== "undefined") selection = { category };
+  else return { ok: false, message: "Corpus selection is required." };
   const inputSelector =
     parsedFlags.values.get("--input-selector") ?? environment.ASK_MAERSK_INPUT_SELECTOR;
   const submitSelector =
     parsedFlags.values.get("--submit-selector") ?? environment.ASK_MAERSK_SUBMIT_SELECTOR;
   const resumePath = parsedFlags.values.get("--resume");
+  const commonOptions: CorpusOptionsBase = {
+    casesDirectory:
+      parsedFlags.values.get("--cases") ??
+      environment.RESEARCH_CASES_DIR ??
+      join(process.cwd(), "cases"),
+    evidenceOutputRoot:
+      parsedFlags.values.get("--output") ??
+      environment.RESEARCH_OUTPUT_DIR ??
+      join(process.cwd(), "data", "runs"),
+    selection,
+    summaryOutputRoot:
+      parsedFlags.values.get("--summary-output") ??
+      environment.RESEARCH_CORPUS_OUTPUT_DIR ??
+      join(process.cwd(), "data", "corpus-runs"),
+    targetUrl: parsedUrl.toString(),
+    ...(typeof inputSelector === "undefined" ? {} : { inputSelector }),
+    ...(typeof submitSelector === "undefined" ? {} : { submitSelector }),
+    ...(typeof resumePath === "undefined" ? {} : { resumePath }),
+  };
+  if (captureOnly) {
+    return { ok: true, options: { ...commonOptions, mode: "capture-only" } };
+  }
+  const policy = resolveAnalysisPolicy(parsedFlags.values, environment);
+  if (!policy.ok) return policy;
   return {
     ok: true,
     options: {
-      captureOnly,
-      casesDirectory:
-        parsedFlags.values.get("--cases") ??
-        environment.RESEARCH_CASES_DIR ??
-        join(process.cwd(), "cases"),
-      evidenceOutputRoot:
-        parsedFlags.values.get("--output") ??
-        environment.RESEARCH_OUTPUT_DIR ??
-        join(process.cwd(), "data", "runs"),
-      selection,
-      summaryOutputRoot:
-        parsedFlags.values.get("--summary-output") ??
-        environment.RESEARCH_CORPUS_OUTPUT_DIR ??
-        join(process.cwd(), "data", "corpus-runs"),
-      targetUrl: parsedUrl.toString(),
-      ...(typeof policy === "undefined" ? {} : { analysisPolicy: policy.policy }),
-      ...(typeof inputSelector === "undefined" ? {} : { inputSelector }),
-      ...(typeof submitSelector === "undefined" ? {} : { submitSelector }),
-      ...(typeof resumePath === "undefined" ? {} : { resumePath }),
+      ...commonOptions,
+      analysisPolicy: policy.policy,
+      mode: "analyzed",
     },
   };
 }

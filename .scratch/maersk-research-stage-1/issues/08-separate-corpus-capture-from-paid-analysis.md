@@ -16,3 +16,4 @@
 ## Comments
 
 - 2026-08-26: Added schema-v2 capture-only summaries, deterministic `--all` selection, zero-model capture, explicit capture/preflight/skip/failure outcomes, immutable resume, and concrete per-case paid-analysis guidance. Legacy analyzed summaries and report generation remain compatible; typecheck and all 54 tests pass.
+- 2026-08-26: Review follow-up consolidated corpus outcomes, introduced discriminated capture/analyzed execution modules, and replaced parallel flag lists with single arity definitions. Typecheck and all 54 tests pass.

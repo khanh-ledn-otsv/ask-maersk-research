@@ -79,7 +79,10 @@ function parseAnalysisOptions(
   if (typeof runDirectory === "undefined" || runDirectory.startsWith("--")) {
     return { ok: false, message: "Usage: pnpm research analyze <run-directory> [options]" };
   }
-  const parsedFlags = parseFlags(flags, ["--model", "--reasoning-effort"]);
+  const parsedFlags = parseFlags(flags, {
+    "--model": "value",
+    "--reasoning-effort": "value",
+  });
   if (!parsedFlags.ok) return parsedFlags;
   const policy = resolveAnalysisPolicy(parsedFlags.values, environment);
   return policy.ok
