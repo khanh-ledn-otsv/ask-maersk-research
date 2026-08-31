@@ -1,0 +1,19 @@
+{
+  "name": "ask-one-manager-deck",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "slidev slides.md --open",
+    "build": "slidev build slides.md",
+    "export": "slidev export slides.md --output ask-one-manager-proposal.pdf",
+    "export:pptx": "slidev export slides.md --format pptx --scale 6 --with-clicks --output ask-one-manager-proposal.pptx",
+    "diagrams": "node scripts/generate-diagrams.mjs"
+  },
+  "devDependencies": {
+    "@slidev/cli": "^52.19.1",
+    "@slidev/theme-default": "^0.25.0",
+    "playwright-chromium": "^1.62.1",
+    "vue": "^3.5.42"
+  }
+}
