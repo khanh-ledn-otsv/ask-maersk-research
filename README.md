@@ -66,7 +66,7 @@ A case declares an ID, category, objective, authentication requirement, executio
 }
 ```
 
-Manual cases keep recording while the researcher controls the persistent browser. Automated cases require a stable question selector and may optionally use a submit selector; without the latter, the recorder presses Enter in the question field:
+Manual cases keep recording while the researcher controls the persistent browser. For automated cases, the recorder opens the Ask Maersk drawer and discovers its editable question control. Input and submit selectors remain optional overrides for alternate page implementations; without a submit selector, the recorder presses Enter in the discovered question field:
 
 ```bash
 ASK_MAERSK_INPUT_SELECTOR='[data-testid="question"]' \
@@ -112,7 +112,7 @@ pnpm research corpus --case CAPABILITY-001
 pnpm research corpus --category KNOWLEDGE
 ```
 
-Corpus execution uses the same cost-conscious analysis defaults as `research analyze` (`gpt-5.4-mini`, reasoning `none`) and accepts the same `--model` and `--reasoning-effort` overrides. Automated cases without a configured `ASK_MAERSK_INPUT_SELECTOR` remain visible as skipped instead of disappearing.
+Corpus execution uses the same cost-conscious analysis defaults as `research analyze` (`gpt-5.4-mini`, reasoning `none`) and accepts the same `--model` and `--reasoning-effort` overrides. Automated cases discover the Ask Maersk drawer controls by default; `ASK_MAERSK_INPUT_SELECTOR` is only needed to override discovery.
 
 Every invocation writes a new immutable `data/corpus-runs/<run-id>/summary.json`. The summary keeps deterministic case order; links completed cases to `evidence.json` and `finding.json`; retains failures and skips; and totals input, cached-input, output, and reasoning tokens. A partial run can be resumed without overwriting it:
 
@@ -130,11 +130,23 @@ pnpm research preflight --all
 pnpm research corpus --all --capture-only
 ```
 
-Preflight opens the configured page in headed mode, validates the final URL, browser authentication state, input and optional submit controls, and assistant/loading selector matches, but never fills or submits a prompt. It reports `preflight-ready` or an actionable `preflight-required` reason for every selected case and saves `.research/preflight.json` by default.
+Preflight opens the configured page in headed mode, opens the Ask Maersk drawer, discovers the input and submit controls, validates the final URL, browser authentication state, and assistant/loading selector matches, but never fills or submits a prompt. It reports `preflight-ready` or an actionable `preflight-required` reason for every selected case and saves the discovered control inventory in `.research/preflight.json` by default.
 
-Capture-only summaries record `captured`, `capture-failed`, `skipped`, and `preflight-required` cases without analysis policy, token usage, or invented finding paths. Every eligible public or fake-data case runs without terminal input. Multi-turn messages for one case share its conversation; each separate case runs in an isolated clone of the configured browser profile so one case cannot leak browser conversation state into the next. Cases that still declare manual setup remain visible as `preflight-required`. The CLI prints a concrete existing `research analyze` command for every captured case, but never runs one automatically.
+Capture-only summaries record `captured`, `capture-failed`, `skipped`, and `preflight-required` cases without analysis policy, token usage, or invented finding paths. Every eligible public or fake-data case runs without terminal input. Multi-turn messages for one case share its conversation; each separate case runs in an isolated clone of the configured browser profile so one case cannot leak browser conversation state into the next. Cases that still declare manual setup remain visible as `preflight-required`.
 
-Headless capture is deliberately a second step: first complete a matching headed preflight, then set `RESEARCH_HEADLESS=true` and run the capture command. A missing or mismatched receipt prevents Chromium from launching.
+Analyze every captured case into a new immutable, report-ready corpus summary:
+
+```bash
+pnpm research analyze-corpus data/corpus-runs/<capture-id>/summary.json
+```
+
+This paid step uses the configured analysis model, reuses compatible existing `finding.json` files, preserves capture failures and preflight requirements as explicit failed or skipped results, and prints the new analyzed summary path. Generate the combined report from that new path:
+
+```bash
+pnpm research report data/corpus-runs/<analyzed-id>/summary.json
+```
+
+Headless capture is optional and only works when the target deployment renders Ask Maersk in headless Chromium. The current public Maersk page may omit the drawer in headless mode; headed corpus execution remains fully automated and requires no question entry.
 
 Authorized-data automation needs both an explicit flag and a local JSON file containing every placeholder declared by the selected case:
 

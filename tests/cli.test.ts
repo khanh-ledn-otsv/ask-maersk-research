@@ -30,11 +30,8 @@ describe("research CLI", () => {
       },
     };
     const browserPreflight = {
-      async preflight(input: { inputSelector: string; targetUrl: string }) {
-        expect(input).toMatchObject({
-          inputSelector: "[data-testid=question]",
-          targetUrl: "https://example.test/ask-maersk",
-        });
+      async preflight(input: { targetUrl: string }) {
+        expect(input).toEqual({ targetUrl: "https://example.test/ask-maersk" });
         return { authenticated: false, issues: [], pageUrl: input.targetUrl };
       },
     };
@@ -44,7 +41,6 @@ describe("research CLI", () => {
       browserPreflight,
       createRunId: () => "unused",
       environment: {
-        ASK_MAERSK_INPUT_SELECTOR: "[data-testid=question]",
         ASK_MAERSK_URL: "https://example.test/ask-maersk",
         RESEARCH_CASES_DIR: casesDirectory,
         RESEARCH_PREFLIGHT_RECEIPT: receiptPath,
@@ -802,8 +798,7 @@ describe("research CLI", () => {
     expect(summary.cases[0]?.caseId).toBe("AUTH-001");
     expect(summary.cases.at(-1)?.caseId).toBe("TRACKING-003");
     expect(output).toContain(`Corpus summary saved: ${summaryPath}`);
-    expect(output.find((message) => message.startsWith("Next paid step (CAPABILITY-001):")))
-      .toMatch(/^Next paid step \(CAPABILITY-001\): pnpm research analyze .*capture-\d+$/u);
+    expect(output).toContain(`Next paid step: pnpm research analyze-corpus ${summaryPath}`);
   });
 
   test("capture-only resume preserves captured evidence and retries capture failures", async () => {

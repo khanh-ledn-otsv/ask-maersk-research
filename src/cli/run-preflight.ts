@@ -40,7 +40,9 @@ export async function runPreflight(
     ]);
     const cases = selectCases(loadedCases, parsed.options.selection);
     const browser = await dependencies.browserPreflight.preflight({
-      inputSelector: parsed.options.inputSelector,
+      ...(typeof parsed.options.inputSelector === "undefined"
+        ? {}
+        : { inputSelector: parsed.options.inputSelector }),
       ...(typeof parsed.options.submitSelector === "undefined"
         ? {}
         : { submitSelector: parsed.options.submitSelector }),
@@ -51,7 +53,9 @@ export async function runPreflight(
         allowAuthorizedData: parsed.options.allowAuthorizedData,
         authenticated: browser.authenticated,
         browserIssues: browser.issues,
-        inputSelector: parsed.options.inputSelector,
+        ...(typeof parsed.options.inputSelector === "undefined"
+          ? {}
+          : { inputSelector: parsed.options.inputSelector }),
         ...(typeof parsed.options.submitSelector === "undefined" ? {} : { submitSelector: parsed.options.submitSelector }),
         testData,
       });
@@ -78,7 +82,9 @@ export async function runPreflight(
         configurationFingerprint: createPreflightFingerprint({
           allowAuthorizedData: parsed.options.allowAuthorizedData,
           cases: loadedCases,
-          inputSelector: parsed.options.inputSelector,
+          ...(typeof parsed.options.inputSelector === "undefined"
+            ? {}
+            : { inputSelector: parsed.options.inputSelector }),
           selection: parsed.options.selection,
           ...(typeof parsed.options.submitSelector === "undefined" ? {} : { submitSelector: parsed.options.submitSelector }),
           targetUrl: parsed.options.targetUrl,
@@ -86,7 +92,9 @@ export async function runPreflight(
         }),
         passedAt: dependencies.now().toISOString(),
         targetUrl: browser.pageUrl,
-        inputSelector: parsed.options.inputSelector,
+        ...(typeof parsed.options.inputSelector === "undefined"
+          ? {}
+          : { inputSelector: parsed.options.inputSelector }),
         ...(typeof parsed.options.submitSelector === "undefined"
           ? {}
           : { submitSelector: parsed.options.submitSelector }),
@@ -110,7 +118,7 @@ type OptionsResult =
       readonly options: {
         readonly casesDirectory: string;
         readonly allowAuthorizedData: boolean;
-        readonly inputSelector: string;
+        readonly inputSelector?: string;
         readonly receiptPath: string;
         readonly selection: Selection;
         readonly submitSelector?: string;
@@ -155,9 +163,6 @@ function parseOptions(
     return { ok: false, message: "Ask Maersk URL must be an http:// or https:// URL." };
   }
   const inputSelector = parsed.values.get("--input-selector") ?? environment.ASK_MAERSK_INPUT_SELECTOR;
-  if (typeof inputSelector === "undefined" || inputSelector.trim().length === 0) {
-    return { ok: false, message: "ASK_MAERSK_INPUT_SELECTOR is required for preflight." };
-  }
   const selection: Selection = all
     ? { all: true }
     : typeof caseId !== "undefined"
@@ -170,10 +175,10 @@ function parseOptions(
     options: {
       allowAuthorizedData: parsed.values.has("--allow-authorized-data"),
       casesDirectory: parsed.values.get("--cases") ?? environment.RESEARCH_CASES_DIR ?? join(process.cwd(), "cases"),
-      inputSelector,
       receiptPath: parsed.values.get("--receipt") ?? environment.RESEARCH_PREFLIGHT_RECEIPT ?? join(process.cwd(), ".research", "preflight.json"),
       selection,
       targetUrl: url.toString(),
+      ...(typeof inputSelector === "undefined" ? {} : { inputSelector }),
       ...(typeof testDataPath === "undefined" ? {} : { testDataPath }),
       ...(typeof submitSelector === "undefined" ? {} : { submitSelector }),
     },

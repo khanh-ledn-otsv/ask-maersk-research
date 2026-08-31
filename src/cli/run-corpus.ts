@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { Analyzer } from "../analysis/analyze-evidence.ts";
 import type { BrowserPreflight, BrowserPreflightResult } from "../browser/browser-preflight.ts";
 import { loadApprovedTestData } from "../cases/load-approved-test-data.ts";
@@ -114,7 +114,9 @@ export async function runCorpus(
     }
     const browserPreflight = receiptPreflight ?? (parsed.options.mode === "capture-only" && typeof dependencies.browserPreflight !== "undefined"
       ? await dependencies.browserPreflight.preflight({
-          inputSelector: parsed.options.inputSelector ?? "",
+          ...(typeof parsed.options.inputSelector === "undefined"
+            ? {}
+            : { inputSelector: parsed.options.inputSelector }),
           ...(typeof parsed.options.submitSelector === "undefined" ? {} : { submitSelector: parsed.options.submitSelector }),
           targetUrl: parsed.options.targetUrl,
         })
@@ -146,12 +148,10 @@ export async function runCorpus(
     );
     dependencies.stdout(`Corpus summary saved: ${result.summaryPath}`);
     if (result.summary.schemaVersion === 2) {
-      for (const case_ of result.summary.cases) {
-        if (case_.status === "captured") {
-          dependencies.stdout(
-            `Next paid step (${case_.caseId}): pnpm research analyze ${dirname(case_.evidencePath)}`,
-          );
-        }
+      if (result.summary.cases.some(({ status }) => status === "captured")) {
+        dependencies.stdout(
+          `Next paid step: pnpm research analyze-corpus ${result.summaryPath}`,
+        );
       }
     } else {
       dependencies.stdout(formatCorpusUsage(result.summary));
@@ -236,12 +236,6 @@ async function executeSelectedAnalyzedCase(
     };
   }
   const interaction = resolveCaseInteraction(case_, options);
-  if (typeof interaction === "undefined") {
-    return {
-      status: "skipped",
-      reason: "Automated case skipped because ASK_MAERSK_INPUT_SELECTOR is not configured.",
-    };
-  }
   dependencies.stdout(`Running ${case_.id}: ${case_.objective}`);
   if (case_.executionMode === "manual") {
     dependencies.stdout(

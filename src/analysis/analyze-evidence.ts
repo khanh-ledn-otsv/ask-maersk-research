@@ -145,13 +145,7 @@ export async function analyzeEvidence(
       .join("; ");
     throw new Error(`Analyzer returned an invalid finding: ${details}`);
   }
-  if (parsed.data.sourceRunId !== evidence.runId) {
-    throw new Error(
-      `Analyzer returned an invalid finding: sourceRunId must be "${evidence.runId}".`,
-    );
-  }
-
-  validateEvidenceReferences(parsed.data, evidence);
+  validateFindingClaims(parsed.data, evidence);
   return {
     ...parsed.data,
     schemaVersion: 1,
@@ -161,6 +155,15 @@ export async function analyzeEvidence(
       ...(typeof response.usage === "undefined" ? {} : { usage: response.usage }),
     },
   };
+}
+
+export function validateFindingClaims(finding: FindingClaims, evidence: CaseEvidence): void {
+  if (finding.sourceRunId !== evidence.runId) {
+    throw new Error(
+      `Analyzer returned an invalid finding: sourceRunId must be "${evidence.runId}".`,
+    );
+  }
+  validateEvidenceReferences(finding, evidence);
 }
 
 function validateEvidenceReferences(finding: FindingClaims, evidence: CaseEvidence): void {

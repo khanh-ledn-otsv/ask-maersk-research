@@ -22,7 +22,7 @@ export interface BrowserRecordingInput {
 export type BrowserInteraction =
   | { readonly mode: "manual" }
   | {
-      readonly inputSelector: string;
+      readonly inputSelector?: string;
       readonly mode: "automated";
       readonly submitSelector?: string;
     };

@@ -11,6 +11,142 @@ const temporaryDirectories = createTemporaryDirectoryTracker();
 afterEach(() => temporaryDirectories.cleanup());
 
 describe("Playwright browser recorder", () => {
+  test("preflight opens the Ask Maersk drawer and discovers its input without submitting", async () => {
+    let submissions = 0;
+    const server = createServer((request, response) => {
+      if (request.method === "POST") submissions += 1;
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<!doctype html><html><body>
+        <a href="#ask-maersk" title="Ask Maersk" aria-expanded="false">Ask Maersk</a>
+        <section class="mc-c-ask-maersk" hidden>
+          <form method="post">
+            <textarea name="search-input" placeholder="How can I help?"></textarea>
+            <button class="am__search">Search</button>
+          </form>
+          <main data-message-author-role="assistant"></main>
+          <div role="progressbar" hidden></div>
+        </section>
+        <script>
+          document.querySelector('[title="Ask Maersk"]').addEventListener('click', (event) => {
+            event.preventDefault();
+            event.currentTarget.setAttribute('aria-expanded', 'true');
+            document.querySelector('.mc-c-ask-maersk').hidden = false;
+          });
+        </script>
+      </body></html>`);
+    });
+    const port = await listen(server);
+    const userDataDirectory = await temporaryDirectories.create("maersk-discovery-preflight-profile-");
+    try {
+      const recorder = createPlaywrightBrowserRecorder({
+        assistantSelector: '[data-message-author-role="assistant"]',
+        headless: true,
+        loadingSelector: '[role="progressbar"]',
+        userDataDirectory,
+      });
+      const result = await recorder.preflight?.({ targetUrl: `http://127.0.0.1:${port}/` });
+
+      expect(result).toMatchObject({ authenticated: true, issues: [] });
+      expect(submissions).toBe(0);
+    } finally {
+      await close(server);
+    }
+  });
+
+  test("preflight waits for the Ask Maersk drawer to hydrate after DOM content loads", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<!doctype html><html><body>
+        <script>
+          setTimeout(() => {
+            document.body.insertAdjacentHTML('beforeend', \`
+              <a href="#ask-maersk" title="Ask Maersk">Ask Maersk</a>
+              <section class="mc-c-ask-maersk" hidden>
+                <textarea name="search-input"></textarea>
+              </section>
+            \`);
+            document.querySelector('[title="Ask Maersk"]').addEventListener('click', (event) => {
+              event.preventDefault();
+              document.querySelector('.mc-c-ask-maersk').hidden = false;
+            });
+          }, 200);
+        </script>
+      </body></html>`);
+    });
+    const port = await listen(server);
+    const userDataDirectory = await temporaryDirectories.create("maersk-hydration-preflight-profile-");
+    try {
+      const recorder = createPlaywrightBrowserRecorder({
+        assistantSelector: ".mc-c-ask-maersk",
+        headless: true,
+        loadingSelector: "body",
+        userDataDirectory,
+      });
+      const result = await recorder.preflight?.({
+        inputSelector: '[name="search-input"]',
+        targetUrl: `http://127.0.0.1:${port}/`,
+      });
+
+      expect(result).toMatchObject({ authenticated: true, issues: [] });
+    } finally {
+      await close(server);
+    }
+  });
+
+  test("automated capture discovers and opens a drawer input without configured selectors", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(`<!doctype html><html><body>
+        <button title="Ask Maersk" aria-expanded="false">Ask Maersk</button>
+        <section class="mc-c-ask-maersk" hidden>
+          <textarea name="search-input" placeholder="How can I help?"></textarea>
+          <div id="answers"></div>
+        </section>
+        <script>
+          const drawer = document.querySelector('.mc-c-ask-maersk');
+          const trigger = document.querySelector('[title="Ask Maersk"]');
+          const input = document.querySelector('[name="search-input"]');
+          trigger.addEventListener('click', () => {
+            trigger.setAttribute('aria-expanded', 'true');
+            drawer.hidden = false;
+          });
+          input.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            const answer = document.createElement('div');
+            answer.className = 'assistant';
+            answer.textContent = 'Discovered drawer response';
+            document.querySelector('#answers').append(answer);
+          });
+        </script>
+      </body></html>`);
+    });
+    const port = await listen(server);
+    const userDataDirectory = await temporaryDirectories.create("maersk-discovery-capture-profile-");
+    try {
+      const recorder = createPlaywrightBrowserRecorder({
+        assistantSelector: ".assistant",
+        headless: true,
+        responseTimeoutMs: 1_000,
+        userDataDirectory,
+      });
+      const capture = await recorder.capture({
+        expectedUserMessages: ["What can you help me with?"],
+        interaction: { mode: "automated" },
+        targetUrl: `http://127.0.0.1:${port}/`,
+        waitForCompletion: async () => undefined,
+      });
+
+      expect(capture.conversation.map(({ role, text }) => ({ role, text }))).toEqual([
+        { role: "user", text: "What can you help me with?" },
+        { role: "assistant", text: "Discovered drawer response" },
+      ]);
+      expect(capture.errors).toEqual([]);
+    } finally {
+      await close(server);
+    }
+  });
+
   test("preflight checks the page and selectors without submitting the form", async () => {
     let submissions = 0;
     const server = createServer((request, response) => {

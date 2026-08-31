@@ -44,6 +44,29 @@ const EVENT_SOURCE_BINDING = "__askMaerskResearchRecordEventSourceMessage";
 const SUBMISSION_BINDING = "__askMaerskResearchRecordSubmission";
 const DEFAULT_LOADING_SELECTOR =
   '[aria-busy="true"], [role="progressbar"], [data-testid*="loading" i], [class*="loading" i]';
+const ASK_MAERSK_DRAWER_TRIGGER_SELECTORS = [
+  '[title="Ask Maersk"]',
+  '[aria-label="Ask Maersk"]',
+  'a:has-text("Ask Maersk")',
+  'button:has-text("Ask Maersk")',
+  '[role="button"]:has-text("Ask Maersk")',
+] as const;
+const ASK_MAERSK_INPUT_SELECTORS = [
+  'mc-c-ask-maersk-ign textarea[name="search-input"]',
+  '.mc-c-ask-maersk textarea[name="search-input"]',
+  'textarea[name="search-input"]',
+  '.mc-c-ask-maersk textarea',
+  'textarea[placeholder*="help" i]',
+  '.mc-c-ask-maersk [role="textbox"]',
+  '.mc-c-ask-maersk [contenteditable="true"]',
+] as const;
+const ASK_MAERSK_SUBMIT_SELECTORS = [
+  '.mc-c-ask-maersk mc-button.am__search',
+  '.mc-c-ask-maersk button.am__search',
+  '.mc-c-ask-maersk button:has-text("Search")',
+  '.mc-c-ask-maersk button:has-text("Send")',
+] as const;
+const CONTROL_DISCOVERY_TIMEOUT_MS = 5_000;
 
 export interface PlaywrightBrowserRecorderOptions {
   readonly assistantSelector?: string;
@@ -156,7 +179,8 @@ export function createPlaywrightBrowserRecorder(
         if (page.url() !== input.targetUrl) {
           issues.push(`Ask Maersk URL redirected from "${input.targetUrl}" to "${page.url()}".`);
         }
-        await checkVisibleSelector(page, input.inputSelector, "Input", issues);
+        const question = await resolveQuestionControl(page, input.inputSelector);
+        if (!question.ok) issues.push(question.issue);
         if (typeof input.submitSelector !== "undefined") {
           await checkVisibleSelector(page, input.submitSelector, "Submit", issues);
         }
@@ -172,7 +196,31 @@ export function createPlaywrightBrowserRecorder(
             'input[type="password"], form[action*="login" i], [data-testid*="login" i], [data-testid*="signin" i]',
           ),
         );
-        return { authenticated: !loginWall, issues, pageUrl: page.url() };
+        const discoveredSubmit = typeof input.submitSelector === "undefined"
+          ? await findVisibleLocator(page, ASK_MAERSK_SUBMIT_SELECTORS)
+          : undefined;
+        return {
+          authenticated: !loginWall,
+          ...(question.ok
+            ? {
+                controls: {
+                  assistant: assistantSelector,
+                  ...(typeof question.drawerTriggerSelector === "undefined"
+                    ? {}
+                    : { drawerTrigger: question.drawerTriggerSelector }),
+                  input: question.selector,
+                  loading: options.loadingSelector ?? DEFAULT_LOADING_SELECTOR,
+                  ...(typeof input.submitSelector !== "undefined"
+                    ? { submit: input.submitSelector }
+                    : typeof discoveredSubmit === "undefined"
+                      ? {}
+                      : { submit: discoveredSubmit.selector }),
+                },
+              }
+            : {}),
+          issues,
+          pageUrl: page.url(),
+        };
       } finally {
         await context.close();
       }
@@ -208,6 +256,122 @@ async function checkSelectorMatch(
   } catch (error: unknown) {
     issues.push(`${label} selector "${selector}" is invalid: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+type QuestionControlResult =
+  | {
+      readonly drawerTriggerSelector?: string;
+      readonly locator: Locator;
+      readonly ok: true;
+      readonly selector: string;
+    }
+  | { readonly issue: string; readonly ok: false };
+
+async function resolveQuestionControl(
+  page: Page,
+  inputSelector?: string,
+): Promise<QuestionControlResult> {
+  const selectors = typeof inputSelector === "undefined"
+    ? ASK_MAERSK_INPUT_SELECTORS
+    : [inputSelector];
+  try {
+    const deadline = Date.now() + CONTROL_DISCOVERY_TIMEOUT_MS;
+    let drawerTriggerSelector: string | undefined;
+    do {
+      const question = await findVisibleEditable(page, selectors);
+      if (typeof question !== "undefined") {
+        return {
+          ...question,
+          ...(typeof drawerTriggerSelector === "undefined"
+            ? {}
+            : { drawerTriggerSelector }),
+          ok: true,
+        };
+      }
+
+      if (typeof drawerTriggerSelector === "undefined") {
+        const trigger = await findVisibleLocator(page, ASK_MAERSK_DRAWER_TRIGGER_SELECTORS);
+        if (typeof trigger !== "undefined") {
+          await trigger.locator.click();
+          drawerTriggerSelector = trigger.selector;
+        }
+      }
+      await page.waitForTimeout(100);
+    } while (Date.now() < deadline);
+
+    return {
+      issue: typeof inputSelector === "undefined"
+        ? "Ask Maersk input control could not be discovered or opened within 5 seconds."
+        : `Input selector "${inputSelector}" did not become visible and editable within 5 seconds.`,
+      ok: false,
+    };
+  } catch (error: unknown) {
+    const label = typeof inputSelector === "undefined" ? "Ask Maersk input discovery" : `Input selector "${inputSelector}"`;
+    return {
+      issue: `${label} is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      ok: false,
+    };
+  }
+}
+
+async function findVisibleEditable(
+  page: Page,
+  selectors: readonly string[],
+): Promise<{ readonly locator: Locator; readonly selector: string } | undefined> {
+  for (const selector of selectors) {
+    const matches = page.locator(selector);
+    const count = await matches.count();
+    for (let index = 0; index < count; index += 1) {
+      const candidate = matches.nth(index);
+      if (!(await candidate.isVisible())) continue;
+      const editable = await candidate.evaluate((element) => {
+        const tag = element.tagName.toLowerCase();
+        if (tag === "textarea") return true;
+        if (tag === "input") {
+          const type = element.getAttribute("type")?.toLowerCase() ?? "text";
+          return ["email", "search", "tel", "text", "url"].includes(type);
+        }
+        return element.getAttribute("contenteditable") === "true" ||
+          element.getAttribute("role") === "textbox";
+      });
+      if (editable) {
+        return {
+          locator: candidate,
+          selector: await describeEditableSelector(candidate, selector),
+        };
+      }
+    }
+  }
+  return undefined;
+}
+
+async function describeEditableSelector(locator: Locator, fallback: string): Promise<string> {
+  return locator.evaluate((element, fallbackSelector) => {
+    const tag = element.tagName.toLowerCase();
+    const attributes = ["data-testid", "name", "aria-label", "placeholder", "id"] as const;
+    for (const attribute of attributes) {
+      const value = element.getAttribute(attribute);
+      if (value !== null && value.length > 0) {
+        return `${tag}[${attribute}=${JSON.stringify(value)}]`;
+      }
+    }
+    return fallbackSelector;
+  }, fallback);
+}
+
+async function findVisibleLocator(
+  page: Page,
+  selectors: readonly string[],
+): Promise<{ readonly locator: Locator; readonly selector: string } | undefined> {
+  for (const selector of selectors) {
+    const matches = page.locator(selector);
+    const count = await matches.count();
+    for (let index = 0; index < count; index += 1) {
+      const candidate = matches.nth(index);
+      if (await candidate.isVisible()) return { locator: candidate, selector };
+    }
+  }
+  return undefined;
 }
 
 interface ResolvedOptions {
@@ -371,8 +535,9 @@ async function executeInteraction(
     return journey.conversation.length === 0 ? undefined : journey;
   }
 
-  const question = page.locator(input.interaction.inputSelector);
-  await question.waitFor({ state: "visible" });
+  const questionControl = await resolveQuestionControl(page, input.interaction.inputSelector);
+  if (!questionControl.ok) throw new Error(questionControl.issue);
+  const question = questionControl.locator;
   const conversation: ConversationTurn[] = [];
   const errors: RecordedError[] = [];
   const screenshots: ScreenshotCapture[] = [];

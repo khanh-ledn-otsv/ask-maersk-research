@@ -9,14 +9,13 @@ export interface CaseInteractionOptions {
 export function resolveCaseInteraction(
   case_: ResearchCase,
   options: CaseInteractionOptions,
-): BrowserInteraction | undefined {
+): BrowserInteraction {
   if (case_.executionMode === "manual") return { mode: "manual" };
-  if (typeof options.inputSelector === "undefined" || options.inputSelector.length === 0) {
-    return undefined;
-  }
   return {
-    inputSelector: options.inputSelector,
     mode: "automated",
+    ...(typeof options.inputSelector === "undefined"
+      ? {}
+      : { inputSelector: options.inputSelector }),
     ...(typeof options.submitSelector === "undefined"
       ? {}
       : { submitSelector: options.submitSelector }),

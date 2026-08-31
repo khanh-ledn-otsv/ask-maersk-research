@@ -7,6 +7,7 @@ import {
   type BrowserRecorder,
 } from "../recording/record-research-session.ts";
 import { runAnalysis, type AnalysisCliDependencies } from "./analyze-run.ts";
+import { runCorpusAnalysis } from "./analyze-corpus.ts";
 import { parseFlags } from "./parse-flags.ts";
 import { runCorpus, type CorpusCliDependencies } from "./run-corpus.ts";
 import { runPreflight } from "./run-preflight.ts";
@@ -51,6 +52,7 @@ export async function runCli(
   const stderr = dependencies.stderr ?? dependencies.stdout;
 
   if (command === "analyze") return runAnalysis(options, dependencies, stderr);
+  if (command === "analyze-corpus") return runCorpusAnalysis(options, dependencies, stderr);
   if (command === "corpus") return runCorpus(options, dependencies, stderr);
   if (command === "preflight") return runPreflight(options, dependencies, stderr);
   if (command === "report") return runReport(options, dependencies, stderr);
@@ -153,9 +155,6 @@ function resolveInteraction(
     return "Authorized-data automation is available only through capture-only corpus execution with --allow-authorized-data and --test-data <path>.";
   }
   const interaction = resolveCaseInteraction(case_, options);
-  if (typeof interaction === "undefined") {
-    return "Automated cases require ASK_MAERSK_INPUT_SELECTOR or --input-selector <selector>.";
-  }
   return interaction;
 }
 
@@ -246,7 +245,7 @@ function resolveCommonOptions(
 
 function reportUsage(stderr: (message: string) => void): 1 {
   stderr(
-    "Usage: pnpm research <record [options] | run <case-id> [options] | preflight <--all | --case id | --category category> [options] | analyze <run-directory> [options] | corpus <--all --capture-only | --case id | --category category> [options] | report <corpus-summary> [options]>",
+    "Usage: pnpm research <record [options] | run <case-id> [options] | preflight <--all | --case id | --category category> [options] | analyze <run-directory> [options] | analyze-corpus <capture-summary> [options] | corpus <--all --capture-only | --case id | --category category> [options] | report <corpus-summary> [options]>",
   );
   return 1;
 }

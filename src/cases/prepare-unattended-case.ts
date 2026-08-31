@@ -20,9 +20,6 @@ export function prepareUnattendedCase(
 ): PreparedUnattendedCase {
   const reasons = [...policy.browserIssues];
   if (case_.executionMode !== "automated") reasons.push("Case declares manual setup and cannot run unattended.");
-  if (typeof policy.inputSelector === "undefined" || policy.inputSelector.trim().length === 0) {
-    reasons.push("ASK_MAERSK_INPUT_SELECTOR is required.");
-  }
   if (case_.authenticated && !policy.authenticated) reasons.push("Case requires an authenticated browser session.");
 
   const placeholders = case_.testDataPlaceholders ?? [];
@@ -54,8 +51,10 @@ export function prepareUnattendedCase(
     ok: true,
     case: { ...case_, messages },
     interaction: {
-      inputSelector: policy.inputSelector as string,
       mode: "automated",
+      ...(typeof policy.inputSelector === "undefined"
+        ? {}
+        : { inputSelector: policy.inputSelector }),
       ...(typeof policy.submitSelector === "undefined" ? {} : { submitSelector: policy.submitSelector }),
     },
   };
