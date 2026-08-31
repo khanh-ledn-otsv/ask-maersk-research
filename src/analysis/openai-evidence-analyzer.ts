@@ -13,6 +13,7 @@ Return exactly one structured finding for the supplied run.
 Classify only observed behavior. Treat API candidates as plausible inferences, never confirmed facts.
 Every behavior claim, API rationale, and Ask ONE implication must cite one or more exact evidence references from the supplied run.
 Use only these reference forms: page:page, conversation:<index>, screenshot:<path>, network:<id>, timing:<turnIndex>, error:<zero-based-index>.
+Each structured evidence reference has separate kind and locator fields. Put only the exact value after the colon in locator; for conversation:0 return {"kind":"conversation","locator":"0"}, and for network:request-20 return {"kind":"network","locator":"request-20"}, never a bare request number or a locator containing its kind prefix.
 Do not invent, repair, or cite a reference that is absent from the supplied evidence.
 If evidence is insufficient, use the unknown classification, low confidence, or omit an API candidate instead of guessing.`;
 

@@ -120,6 +120,46 @@ describe("evidence analysis", () => {
       reasoningEffort: "low",
     });
   });
+
+  test("normalizes a redundant evidence kind prefix in structured locators", async () => {
+    const analyzer = createAnalyzer({
+      model: "gpt-5.4-mini",
+      output: {
+        ...validOutput,
+        behavior: {
+          ...validOutput.behavior,
+          evidenceReferences: [{ kind: "conversation", locator: "conversation:1" }],
+        },
+      },
+    });
+
+    const finding = await analyzeEvidence(evidence, { analyzer });
+
+    expect(finding.behavior.evidenceReferences).toEqual([
+      { kind: "conversation", locator: "1" },
+    ]);
+  });
+
+  test("normalizes a numeric network locator to the captured request id", async () => {
+    const analyzer = createAnalyzer({
+      model: "gpt-5.4-mini",
+      output: {
+        ...validOutput,
+        apiCandidates: [
+          {
+            ...validOutput.apiCandidates[0],
+            evidenceReferences: [{ kind: "network", locator: "1" }],
+          },
+        ],
+      },
+    });
+
+    const finding = await analyzeEvidence(evidence, { analyzer });
+
+    expect(finding.apiCandidates[0]?.evidenceReferences).toEqual([
+      { kind: "network", locator: "request-1" },
+    ]);
+  });
 });
 
 const evidence = {

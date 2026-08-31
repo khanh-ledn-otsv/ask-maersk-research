@@ -145,9 +145,10 @@ export async function analyzeEvidence(
       .join("; ");
     throw new Error(`Analyzer returned an invalid finding: ${details}`);
   }
-  validateFindingClaims(parsed.data, evidence);
+  const finding = normalizeFindingClaims(parsed.data, evidence);
+  validateFindingClaims(finding, evidence);
   return {
-    ...parsed.data,
+    ...finding,
     schemaVersion: 1,
     analysis: {
       model: response.model,
@@ -155,6 +156,48 @@ export async function analyzeEvidence(
       ...(typeof response.usage === "undefined" ? {} : { usage: response.usage }),
     },
   };
+}
+
+function normalizeFindingClaims(finding: FindingClaims, evidence: CaseEvidence): FindingClaims {
+  const normalizeReference = (reference: EvidenceReference): EvidenceReference =>
+    normalizeEvidenceReference(reference, evidence);
+  return {
+    ...finding,
+    behavior: {
+      ...finding.behavior,
+      evidenceReferences: finding.behavior.evidenceReferences.map(normalizeReference),
+    },
+    apiCandidates: finding.apiCandidates.map((candidate) => ({
+      ...candidate,
+      evidenceReferences: candidate.evidenceReferences.map(normalizeReference),
+    })),
+    askOneImplications: finding.askOneImplications.map((implication) => ({
+      ...implication,
+      evidenceReferences: implication.evidenceReferences.map(normalizeReference),
+    })),
+  };
+}
+
+function normalizeEvidenceReference(
+  reference: EvidenceReference,
+  evidence: CaseEvidence,
+): EvidenceReference {
+  const redundantPrefix = `${reference.kind}:`;
+  const normalized = reference.locator.startsWith(redundantPrefix)
+    ? { ...reference, locator: reference.locator.slice(redundantPrefix.length) }
+    : reference;
+
+  if (normalized.kind !== "network" || !/^\d+$/u.test(normalized.locator)) {
+    return normalized;
+  }
+
+  const capturedIds = new Set(evidence.network.map(({ id }) => id));
+  if (capturedIds.has(normalized.locator)) {
+    return normalized;
+  }
+
+  const requestId = `request-${normalized.locator}`;
+  return capturedIds.has(requestId) ? { ...normalized, locator: requestId } : normalized;
 }
 
 export function validateFindingClaims(finding: FindingClaims, evidence: CaseEvidence): void {
